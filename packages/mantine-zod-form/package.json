@@ -1,0 +1,32 @@
+{
+    "name": "@denizblue/mantine-zod-form",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "files": [
+        "/dist"
+    ],
+    "exports": {
+        ".": "./src/index.ts"
+    },
+    "publishConfig": {
+        "main": "dist/src/index.js",
+        "types": "dist/src/index.d.ts"
+    },
+    "scripts": {
+        "build": "tsc",
+        "prepublish": "tsc"
+    },
+    "keywords": [],
+    "author": "alan404",
+    "devDependencies": {
+        "@repo/typescript-config": "workspace:*",
+        "@types/react": "^19.2.7",
+        "typescript": "^5.6.3"
+    },
+    "dependencies": {
+        "@mantine/core": "^8.3.9",
+        "react": "^19.2.1",
+        "zod": "^4.2.1"
+    }
+}

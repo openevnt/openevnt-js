@@ -1,6 +1,6 @@
 {
 	"name": "@evnt/schema",
-	"version": "0.0.9-next.0",
+	"version": "0.1.0",
 	"type": "module",
 	"description": "Zod Schema for OpenEvnt",
 	"author": "OpenEvnt",
@@ -33,6 +33,7 @@
 	},
 	"dependencies": {
 		"@evnt/partial-date": "workspace:^",
-		"@evnt/translations": "workspace:^"
+		"@evnt/translations": "workspace:^",
+		"@evnt/types": "workspace:^"
 	}
 }

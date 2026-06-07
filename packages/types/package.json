@@ -1,0 +1,28 @@
+{
+	"name": "@evnt/types",
+	"version": "0.1.0",
+	"type": "module",
+	"description": "Types for OpenEvnt",
+	"author": "OpenEvnt",
+	"keywords": [],
+	"files": [
+		"/dist"
+	],
+	"main": "./src/index.ts",
+	"publishConfig": {
+		"main": "./dist/index.js",
+		"types": "./dist/index.d.ts"
+	},
+	"homepage": "https://evnt.directory",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/openevnt/evnt.git",
+		"directory": "packages/types"
+	},
+	"scripts": {
+		"build": "tsc && ts-add-js-extension --dir=dist"
+	},
+	"devDependencies": {
+		"typescript": "^6.0.3"
+	}
+}

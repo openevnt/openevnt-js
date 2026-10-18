@@ -21,7 +21,6 @@ This monorepo uses [pnpm](https://pnpm.io/) as the package manager.
 
 - `pnpm install` - install dependencies
 - `pnpm build` - build all packages
-- `pnpm schema` - generate a JSON schema from the Zod schemas into `openevnt.schema.json`
 - `pnpm test` - run vitest tests
 - `pnpm fmt` - run oxfmt
 - `pnpm lint` - run oxlint

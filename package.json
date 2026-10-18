@@ -4,15 +4,12 @@
 		"build": "pnpm -r build",
 		"test": "vitest",
 		"fmt": "oxfmt",
-		"lint": "oxlint",
-		"schema": "pnpm -F @repo/scripts schema:generate && oxfmt ./openevnt.schema.json"
+		"lint": "oxlint"
 	},
 	"devDependencies": {
 		"oxfmt": "^0.58.0",
 		"oxlint": "^1.73.0",
-		"turbo": "^2.7.2",
-		"vitest": "^4.1.0",
-		"zod": "^4.3.6"
+		"vitest": "^4.1.0"
 	},
 	"packageManager": "pnpm@11.6.0"
 }

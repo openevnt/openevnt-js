@@ -1,10 +1,12 @@
-import type { OpenEvnt, PartialDate } from "@evnt/types";
+import type { OpenEvnt } from "@evnt/types";
+import { PartialDate, type PartialDateString } from "@evnt/partial-date";
 import { createTranslations } from "../utils/translations.js";
 import { asNonEmptyString } from "../utils/text.js";
-import { dateToPartialDate } from "../utils/date.js";
+import { addDays, parseDateString } from "../utils/date.js";
+import { documentId } from "../utils/document.js";
 import type { FormatConverter, ConvertOptions } from "../types.js";
 
-interface GoogleCalendarEvent {
+export interface GoogleCalendarEvent {
 	summary?: string | null;
 	location?: string | null;
 	start?: { date?: string | null; dateTime?: string | null; timeZone?: string | null } | null;
@@ -12,61 +14,35 @@ interface GoogleCalendarEvent {
 	[key: string]: unknown;
 }
 
-export const google: FormatConverter = {
+export const google = {
 	name: "Google Calendar",
 	description: "Google Calendar API event format (JSON)",
 	extensions: ["json"],
 	mimeTypes: ["application/json"],
 
-	from: (input: string, opts?: ConvertOptions): OpenEvnt => {
-		const data: GoogleCalendarEvent = JSON.parse(input);
+	from: (data: GoogleCalendarEvent, opts?: ConvertOptions): OpenEvnt => {
+		const lang = opts?.language ?? "en";
+		const location = asNonEmptyString(data.location);
 
-		const venues: NonNullable<OpenEvnt["venues"]> = [];
-		const locationStr = asNonEmptyString(data.location);
-		if (locationStr) {
-			venues.push({
-				id: "google-location",
-				$type: "directory.evnt.venue.physical",
-				name: { en: locationStr },
-			});
-		}
-
-		const asPartialDate = (obj: GoogleCalendarEvent["start"]): PartialDate | undefined => {
-			if (!obj) return undefined;
-
-			if (obj.dateTime) {
-				const date = new Date(obj.dateTime);
-				if (isNaN(date.getTime())) return undefined;
-
-				if (obj.timeZone) {
-					// Convert to the target timezone using locale string
-					const localized = new Date(date.toLocaleString("en-US", { timeZone: obj.timeZone }));
-					return dateToPartialDate(localized, obj.timeZone);
-				}
-				return dateToPartialDate(date, "UTC");
-			}
-
-			if (obj.date) {
-				return obj.date as PartialDate;
-			}
-
+		const asPartialDate = (time: GoogleCalendarEvent["start"]): PartialDateString | undefined => {
+			const timeZoneId = time?.timeZone ?? opts?.timezone ?? "UTC";
+			if (time?.dateTime) return parseDateString(time.dateTime, timeZoneId);
+			if (time?.date) return parseDateString(time.date, timeZoneId);
 			return undefined;
 		};
 
-		const lang = opts?.language ?? "en";
-		const name = createTranslations(data.summary, lang);
+		const start = asPartialDate(data.start);
+		let end = asPartialDate(data.end);
+		// Google Calendar gives an all-day event's end as the day after its last day.
+		if (end && !data.end?.dateTime)
+			end = addDays(PartialDate.from(end).withPrecision("day"), -1).toString();
 
 		return {
-			v: "0.1",
-			name: Object.keys(name).length > 0 ? name : { [lang]: "No Title" },
-			venues: venues.length > 0 ? venues : undefined,
-			instances: [
-				{
-					venueIds: venues.map((v) => v.id),
-					start: asPartialDate(data.start),
-					end: asPartialDate(data.end),
-				},
-			],
+			v: "0.2",
+			id: documentId(opts),
+			name: createTranslations(data.summary, lang) ?? { [lang]: "No Title" },
+			venue: location ? { name: { [lang]: location } } : undefined,
+			occurrences: start || end ? [{ start, end }] : undefined,
 		};
 	},
-};
+} satisfies FormatConverter<GoogleCalendarEvent>;

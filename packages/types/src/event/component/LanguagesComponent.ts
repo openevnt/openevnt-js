@@ -5,7 +5,7 @@ export namespace LanguagesComponent {
 }
 
 export interface LanguagesComponent {
-	$type: "directory.evnt.component.languages";
+	$type: "directory.evnt.component.languages#0";
 	languages: LanguagesComponent.LanguageInfo[];
 }
 

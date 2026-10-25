@@ -1,8 +1,7 @@
 import pc from "picocolors";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { OpenEvntSchema } from "@evnt/schema";
-import { ZodError } from "zod";
+import { OpenEvntValidator } from "@evnt/schema";
 import { SchemaValidationError } from "../errors.js";
 
 const findJsonFiles = (dir: string): string[] => {
@@ -41,12 +40,12 @@ export default async function (dir: string) {
 			continue;
 		}
 
-		const result = OpenEvntSchema.safeParse(json);
-		if (result.success) {
+		const result = OpenEvntValidator.validate(json);
+		if (!result.issues) {
 			console.log(pc.green("✓") + ` ${file}`);
 			valid++;
 		} else {
-			const err = new SchemaValidationError(file, result.error as ZodError, content);
+			const err = new SchemaValidationError(file, result.issues, content);
 			console.error(pc.red("✗") + ` ${file}`);
 			console.error(err.getCodeFrames());
 			invalid++;

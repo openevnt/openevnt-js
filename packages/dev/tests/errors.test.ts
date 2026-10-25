@@ -1,38 +1,27 @@
 import { describe, expect, test } from "vitest";
-import { ZodError } from "zod";
 import { SchemaValidationError, JSONParseError } from "../src/index";
 
 describe("SchemaValidationError", () => {
-	test("stores path, zodError, and fileContent", () => {
-		const zodError = new ZodError([
-			{
-				code: "invalid_type",
-				expected: "string",
-				received: "number",
-				path: ["name"],
-				message: "Expected string, received number",
-			},
-		]);
-		const error = new SchemaValidationError("/path/to/file.json", zodError, "content");
+	const issues = [{ message: "must be a string", path: ["name", "en"] }];
+
+	test("stores path, issues, and fileContent", () => {
+		const error = new SchemaValidationError("/path/to/file.json", issues, "content");
 		expect(error.path).toBe("/path/to/file.json");
-		expect(error.zodError).toBe(zodError);
+		expect(error.issues).toBe(issues);
 		expect(error.fileContent).toBe("content");
 	});
 
-	test("getCodeFrames returns a string", () => {
-		const zodError = new ZodError([
-			{
-				code: "invalid_type",
-				expected: "string",
-				received: "number",
-				path: ["name"],
-				message: "Expected string, received number",
-			},
-		]);
-		const error = new SchemaValidationError("/path/file.json", zodError, '{"name": 42}');
+	test("getCodeFrames points at the value of each issue", () => {
+		const error = new SchemaValidationError("/path/file.json", issues, '{"name": {"en": 42}}');
 		const frames = error.getCodeFrames();
-		expect(typeof frames).toBe("string");
 		expect(frames).toContain("/path/file.json");
+		expect(frames).toContain("Issue: must be a string");
+		expect(frames).toContain("42");
+	});
+
+	test("prettify names the path of each issue", () => {
+		const error = new SchemaValidationError("/path/file.json", issues, "{}");
+		expect(error.prettify()).toBe("name.en: must be a string");
 	});
 });
 

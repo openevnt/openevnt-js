@@ -1,8 +1,9 @@
 import { describe, expect, test } from "vitest";
 import { hEvent } from "../src/formats/h-event";
+import { expectValid } from "./valid";
 
 const { from } = hEvent;
-const convertFromHEvent = from!;
+const convertFromHEvent = from;
 
 describe("h-event converter", () => {
 	test("converts a basic h-event with name, start, and end", () => {
@@ -16,10 +17,12 @@ describe("h-event converter", () => {
 
 		const event = convertFromHEvent(html);
 
-		expect(event.v).toBe("0.1");
+		expectValid(event);
+		expect(event.v).toBe("0.2");
 		expect(event.name.en).toBe("IndieWeb Summit 2026");
-		expect(event.instances?.[0]?.start).toBeDefined();
-		expect(event.instances?.[0]?.end).toBeDefined();
+		expect(event.occurrences).toEqual([
+			{ start: "2026-06-27T16:00[UTC]", end: "2026-06-29T01:00[UTC]" },
+		]);
 	});
 
 	test("converts h-event with physical venue", () => {
@@ -35,13 +38,15 @@ describe("h-event converter", () => {
 		const event = convertFromHEvent(html);
 
 		expect(event.name.en).toBe("Open Evnt Meetup");
-		expect(event.venues).toHaveLength(1);
-		expect(event.venues?.[0]?.$type).toBe("directory.evnt.venue.physical");
-		expect(event.venues?.[0]?.name.en).toBe("Vilnius Tech Park, Lithuania");
-		expect(event.instances?.[0]?.venueIds).toContain("hevent:venue:0");
+		expectValid(event);
+		expect(event.venue).toEqual({ name: { en: "Vilnius Tech Park, Lithuania" } });
+		expect(event.components).toContainEqual({
+			$type: "directory.evnt.text.plain#0",
+			content: { en: "A meetup about open event formats." },
+		});
 	});
 
-	test("converts h-event with online venue (URL in p-location)", () => {
+	test("converts a URL in p-location to a link", () => {
 		const html = `
 			<div class="h-event">
 				<span class="p-name">Virtual Meetup</span>
@@ -52,12 +57,12 @@ describe("h-event converter", () => {
 
 		const event = convertFromHEvent(html);
 
-		expect(event.venues).toHaveLength(1);
-		expect(event.venues?.[0]?.$type).toBe("directory.evnt.venue.online");
-		expect((event.venues?.[0] as { url?: string } | undefined)?.url).toBe(
-			"https://meet.example.com/virtual",
-		);
-		expect(event.instances?.[0]?.start).toBeDefined();
+		expectValid(event);
+		expect(event.venue).toBeUndefined();
+		expect(event.components).toEqual([
+			{ $type: "directory.evnt.component.link#0", url: "https://meet.example.com/virtual" },
+		]);
+		expect(event.occurrences?.[0]?.start).toBe("2026-08-01[UTC]");
 	});
 
 	test("converts h-event with u-url link", () => {
@@ -75,7 +80,7 @@ describe("h-event converter", () => {
 		expect(event.components).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
-					$type: "directory.evnt.component.link",
+					$type: "directory.evnt.component.link#0",
 					url: "https://events.example.com/42",
 				}),
 			]),
@@ -94,10 +99,7 @@ describe("h-event converter", () => {
 		const event = convertFromHEvent(html);
 
 		expect(event.name.en).toBe("Community Day");
-		expect(event.instances?.[0]?.start).toBeDefined();
-		expect(event.instances?.[0]?.end).toBeDefined();
-		// Date-only should not have time precision — check the partial date
-		expect(event.instances?.[0]?.start).toMatch(/^\d{4}-\d{2}-\d{2}/);
+		expect(event.occurrences).toEqual([{ start: "2026-09-15[UTC]", end: "2026-09-15[UTC]" }]);
 	});
 
 	test("converts h-event with p-summary as fallback name", () => {
@@ -160,22 +162,22 @@ describe("h-event converter", () => {
 		const event = convertFromHEvent(html);
 
 		expect(event.name.en).toBe("Local Workshop");
-		expect(event.venues?.[0]?.$type).toBe("directory.evnt.venue.physical");
-		expect(event.venues?.[0]?.name.en).toBe("123 Main St, Springfield");
+		expectValid(event);
+		expect(event.venue?.name?.en).toBe("123 Main St, Springfield");
 		expect(event.components).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
-					$type: "directory.evnt.component.link",
+					$type: "directory.evnt.component.link#0",
 					url: "https://example.com/workshop",
 				}),
 			]),
 		);
 		expect(event.components).toEqual(
 			expect.arrayContaining([
-				expect.objectContaining({
-					$type: "directory.evnt.richtext.markdown",
-					content: "Learn about open data formats.",
-				}),
+				{
+					$type: "directory.evnt.text.plain#0",
+					content: { en: "Learn about open data formats." },
+				},
 			]),
 		);
 	});
@@ -190,9 +192,7 @@ describe("h-event converter", () => {
 
 		const event = convertFromHEvent(html);
 
-		expect(event.instances?.[0]?.start).toBeDefined();
-		// The parsed date should be Dec 25, not the text
-		expect(event.instances?.[0]?.start).toContain("2026-12-25");
+		expect(event.occurrences?.[0]?.start).toBe("2026-12-25[UTC]");
 	});
 
 	test("handles classes appearing in any order on the element", () => {
@@ -209,7 +209,7 @@ describe("h-event converter", () => {
 		expect(event.components).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
-					$type: "directory.evnt.component.link",
+					$type: "directory.evnt.component.link#0",
 					url: "https://example.com/e1",
 				}),
 			]),

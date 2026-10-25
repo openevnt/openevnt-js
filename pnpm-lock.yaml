@@ -33,18 +33,12 @@ importers:
 
   packages/convert:
     dependencies:
-      '@evnt/builder':
-        specifier: workspace:^
-        version: link:../builder
       '@evnt/partial-date':
         specifier: workspace:^
         version: link:../partial-date
       '@evnt/schema':
         specifier: workspace:^
         version: link:../schema
-      '@evnt/translations':
-        specifier: workspace:^
-        version: link:../translations
       '@evnt/types':
         specifier: workspace:^
         version: link:../types
@@ -70,9 +64,6 @@ importers:
       domhandler:
         specifier: ^6.0.1
         version: 6.0.1
-      temporal-polyfill-lite:
-        specifier: ^0.2.0
-        version: 0.2.3
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -106,12 +97,6 @@ importers:
       picocolors:
         specifier: ^1.1.1
         version: 1.1.1
-      temporal-polyfill-lite:
-        specifier: ^0.2.3
-        version: 0.2.3
-      zod:
-        specifier: ^4.3.6
-        version: 4.3.6
     devDependencies:
       '@repo/typescript-config':
         specifier: workspace:*
@@ -157,9 +142,6 @@ importers:
       '@repo/typescript-config':
         specifier: workspace:^
         version: link:../typescript-config
-      temporal-polyfill-lite:
-        specifier: ^0.2.0
-        version: 0.2.3
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -169,15 +151,9 @@ importers:
       '@evnt/partial-date':
         specifier: workspace:^
         version: link:../partial-date
-      '@evnt/translations':
-        specifier: workspace:^
-        version: link:../translations
       '@evnt/types':
         specifier: workspace:^
         version: link:../types
-      zod:
-        specifier: ^4
-        version: 4.3.6
     devDependencies:
       '@repo/typescript-config':
         specifier: workspace:^
@@ -1402,9 +1378,6 @@ packages:
     engines: {node: '>= 14.6'}
     hasBin: true
 
-  zod@4.3.6:
-    resolution: {integrity: sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg==}
-
 snapshots:
 
   '@atcute/car@5.1.1':
@@ -2291,5 +2264,3 @@ snapshots:
 
   yaml@2.8.2:
     optional: true
-
-  zod@4.3.6: {}

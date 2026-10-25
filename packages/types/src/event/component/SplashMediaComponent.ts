@@ -11,7 +11,7 @@ export namespace SplashMediaComponent {
 }
 
 export interface SplashMediaComponent {
-	$type: "directory.evnt.component.splashMedia";
-	roles: SplashMediaComponent.SplashMediaRole[];
+	$type: "directory.evnt.component.splashMedia#0";
+	roles?: SplashMediaComponent.SplashMediaRole[];
 	media: Media;
 }

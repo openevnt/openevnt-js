@@ -1,59 +1,78 @@
-/**
- * Date conversion helpers shared across format converters.
- */
-import { PartialDateUtil } from "@evnt/partial-date";
-import type { PartialDate } from "@evnt/types";
+import { PartialDate, type PartialDateString } from "@evnt/partial-date";
 
-/** Guess whether a time value represents midnight (for precision inference). */
-export const isMidnight = (hour: number, minute: number): boolean => hour === 0 && minute === 0;
+const WRITTEN_DATE_PATTERN =
+	/^(?<year>\d{4})(?:-(?<month>\d{1,2})(?:-(?<day>\d{1,2})(?:[T ](?<hour>\d{1,2}):(?<minute>\d{2})(?::(?<second>\d{2})(?:[.,]\d+)?)?(?<offset>Z|[+-]\d{1,2}(?::?\d{2})?)?)?)?)?$/i;
 
-/** Build a PartialDate string from a Date and a timezone ID. */
-export const dateToPartialDate = (date: Date, timezone: string): PartialDate => {
-	const hour = date.getUTCHours();
-	const minute = date.getUTCMinutes();
-	const precision: "day" | "time" = isMidnight(hour, minute) ? "day" : "time";
-
-	return PartialDateUtil.format({
-		year: date.getUTCFullYear(),
-		month: date.getUTCMonth() + 1,
-		day: date.getUTCDate(),
-		hour,
-		minute,
-		timezone,
-		precision,
-	} as PartialDate.Parsed);
+const offsetMilliseconds = (offset: string): number => {
+	if (offset.toUpperCase() === "Z") return 0;
+	const [, sign, hours, minutes = "0"] = /^([+-])(\d{1,2}):?(\d{2})?$/.exec(offset)!;
+	return (sign === "-" ? -1 : 1) * (Number(hours) * 60 + Number(minutes)) * 60_000;
 };
 
-/** Try to parse an ISO‑8601 / JS‑style date string into a PartialDate. */
-export const parseDateString = (value: string): PartialDate | undefined => {
-	// Already a valid PartialDate with timezone — use as-is
-	if (PartialDateUtil.isValid(value as any)) {
-		return value as PartialDate;
+const optionalNumber = (text: string | undefined): number | undefined =>
+	text === undefined ? undefined : Number(text);
+
+/** Midnight is how most formats write a date without a time. */
+const dayIfMidnight = (time: PartialDate.Time): PartialDateString =>
+	(time.hour === 0 && time.minute === 0 ? time.toDay() : time).toString();
+
+export const parseDateString = (
+	value: string,
+	timeZoneId = "UTC",
+): PartialDateString | undefined => {
+	if (PartialDate.isValid(value)) return value;
+	const written = WRITTEN_DATE_PATTERN.exec(value.trim())?.groups;
+	try {
+		if (!written) {
+			const instant = Date.parse(value);
+			return Number.isFinite(instant)
+				? dayIfMidnight(PartialDate.fromEpochMilliseconds(instant, timeZoneId))
+				: undefined;
+		}
+		const fields = {
+			year: Number(written.year),
+			month: optionalNumber(written.month),
+			day: optionalNumber(written.day),
+			hour: optionalNumber(written.hour),
+			minute: optionalNumber(written.minute),
+		};
+		if (written.hour === undefined) return PartialDate.from({ ...fields, timeZoneId }).toString();
+		if (written.offset === undefined)
+			return dayIfMidnight(PartialDate.from({ ...fields, timeZoneId }).withPrecision("time"));
+		const wallClockInUtc = PartialDate.from({ ...fields, timeZoneId: "UTC" });
+		const instant =
+			wallClockInUtc.startEpochMilliseconds +
+			(optionalNumber(written.second) ?? 0) * 1000 -
+			offsetMilliseconds(written.offset);
+		return dayIfMidnight(PartialDate.fromEpochMilliseconds(instant, timeZoneId));
+	} catch {
+		return undefined;
 	}
-
-	// Try parsing as a JS Date, then format as PartialDate with UTC timezone
-	const date = new Date(value);
-	if (Number.isNaN(date.getTime())) return undefined;
-
-	const isMidnightUTC = date.getUTCHours() === 0 && date.getUTCMinutes() === 0;
-	return PartialDateUtil.format({
-		year: date.getUTCFullYear(),
-		month: date.getUTCMonth() + 1,
-		day: date.getUTCDate(),
-		hour: date.getUTCHours(),
-		minute: date.getUTCMinutes(),
-		timezone: "UTC",
-		precision: isMidnightUTC ? "day" : "time",
-	} as PartialDate.Parsed);
 };
 
-/** Format a PartialDate as an ISO instant string (only for time-precision dates). */
-export const partialDateToIso = (value: PartialDate): string | undefined => {
-	const parsed = PartialDateUtil.parse(value);
-	if (parsed.precision !== "time") return undefined;
-	return PartialDateUtil.asZonedDateTime(parsed).toInstant().toString();
+const offsetText = (milliseconds: number): string => {
+	if (milliseconds === 0) return "Z";
+	const minutes = Math.abs(milliseconds) / 60_000;
+	const twoDigits = (value: number) => String(value).padStart(2, "0");
+	return `${milliseconds < 0 ? "-" : "+"}${twoDigits(Math.floor(minutes / 60))}:${twoDigits(minutes % 60)}`;
 };
 
-/** Fix common date string quirks (e.g. WordPress "2024-05-01T9:00+3:00") */
-export const normalizeDateString = (dateStr: string): string =>
-	dateStr.replace(/([+-])(\d:)/g, "$10$2");
+export const partialDateToIso = (value: PartialDateString): string | undefined => {
+	const date = PartialDate.from(value);
+	if (!date.has("time")) return undefined;
+	const offset =
+		date.with({ timeZoneId: "UTC" }).startEpochMilliseconds - date.startEpochMilliseconds;
+	return `${date.toString().slice(0, 16)}:00${offsetText(offset)}`;
+};
+
+export function addDays(date: PartialDate.Day, days: number): PartialDate.Day;
+export function addDays(date: PartialDate.Time, days: number): PartialDate.Time;
+export function addDays(date: PartialDate.Day | PartialDate.Time, days: number) {
+	const shifted = new Date(0);
+	shifted.setUTCFullYear(date.year, date.month - 1, date.day + days);
+	return date.with({
+		year: shifted.getUTCFullYear(),
+		month: shifted.getUTCMonth() + 1,
+		day: shifted.getUTCDate(),
+	});
+}

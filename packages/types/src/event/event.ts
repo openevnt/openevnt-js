@@ -1,16 +1,17 @@
 import type { Translations } from "../types/Translations.js";
 import type { AnyComponent } from "./component/index.js";
-import type { EventInstance } from "./instance/index.js";
+import type { Occurrence } from "./occurrence/index.js";
 import type { Venue } from "./venue/index.js";
 
 export interface OpenEvnt {
-	v: "0.1";
+	$type?: "directory.evnt.event";
+	v: "0.2";
+	id: string;
 	name: Translations;
-	label?: Translations;
 	status?: EventStatus;
-	instances?: EventInstance[];
-	venues?: Venue[];
+	venue?: Venue;
+	occurrences?: Occurrence[];
 	components?: AnyComponent[];
 }
 
-export type EventStatus = "planned" | "uncertain" | "postponed" | "cancelled" | "suspended";
+export type EventStatus = "uncertain" | "cancelled" | "postponed";

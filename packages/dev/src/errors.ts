@@ -1,6 +1,6 @@
 import { findNodeAtLocation, parseTree } from "jsonc-parser";
-import z, { ZodError } from "zod";
 import { codeFrameColumns } from "@babel/code-frame";
+import { OpenEvntValidationError, type StandardSchemaV1 } from "@evnt/schema";
 
 const getPosition = (text: string, offset: number) => {
 	return {
@@ -9,25 +9,31 @@ const getPosition = (text: string, offset: number) => {
 	};
 };
 
+const keysOf = (path: StandardSchemaV1.Issue["path"]): (string | number)[] =>
+	(path ?? []).map((segment) => {
+		const key = typeof segment === "object" ? segment.key : segment;
+		return typeof key === "number" ? key : String(key);
+	});
+
 export class SchemaValidationError extends Error {
 	constructor(
 		public path: string,
-		public zodError: ZodError,
+		public issues: readonly StandardSchemaV1.Issue[],
 		public fileContent: string,
 	) {
 		super();
 	}
 
 	prettify() {
-		return z.prettifyError(this.zodError);
+		return new OpenEvntValidationError(this.issues).message;
 	}
 
 	getCodeFrames() {
 		const frames: string[] = [];
-		for (const issue of this.zodError.issues) {
+		for (const issue of this.issues) {
 			const json = parseTree(this.fileContent);
 			if (json == null) continue;
-			const node = findNodeAtLocation(json, issue.path as (string | number)[]);
+			const node = findNodeAtLocation(json, keysOf(issue.path));
 			if (node == null) continue;
 			const start = getPosition(this.fileContent, node.offset);
 			const end = getPosition(this.fileContent, node.offset + node.length);

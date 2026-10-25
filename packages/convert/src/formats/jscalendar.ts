@@ -1,9 +1,18 @@
-import type { EventInstance, OpenEvnt, PartialDate, Translations } from "@evnt/types";
+import type { AnyComponent, Occurrence, OpenEvnt, Translations, Venue } from "@evnt/types";
+import { PartialDate, type PartialDateString } from "@evnt/partial-date";
 import { translate, createTranslations } from "../utils/translations.js";
 import { isRecord, asNonEmptyString } from "../utils/text.js";
-import { parseDateString } from "../utils/date.js";
-import { PartialDateUtil } from "@evnt/partial-date";
-import type { FormatConverter, ConvertOptions } from "../types.js";
+import { addDays, parseDateString } from "../utils/date.js";
+import {
+	findDescription,
+	isLink,
+	isSource,
+	link,
+	markdownText,
+	plainText,
+} from "../utils/components.js";
+import { documentId, nonEmpty } from "../utils/document.js";
+import type { FormatConverter, ConvertOptions, JsonObject } from "../types.js";
 
 interface JscLink {
 	"@type"?: string;
@@ -15,8 +24,6 @@ interface JscLink {
 
 const fromJscStatus = (status: string | undefined): OpenEvnt["status"] => {
 	switch (status) {
-		case "confirmed":
-			return "planned";
 		case "tentative":
 			return "uncertain";
 		case "cancelled":
@@ -28,11 +35,8 @@ const fromJscStatus = (status: string | undefined): OpenEvnt["status"] => {
 
 const toJscStatus = (status: OpenEvnt["status"]): string | undefined => {
 	switch (status) {
-		case "planned":
-			return "confirmed";
 		case "uncertain":
 		case "postponed":
-		case "suspended":
 			return "tentative";
 		case "cancelled":
 			return "cancelled";
@@ -44,11 +48,23 @@ const toJscStatus = (status: OpenEvnt["status"]): string | undefined => {
 const pad = (value: number, width = 2): string => String(value).padStart(width, "0");
 
 /** A JSCalendar LocalDateTime carries no zone; the zone travels in `timeZone`. */
-const localDateTime = (parsed: PartialDate.Parsed): string => {
-	const day = PartialDateUtil.asPlainDate(PartialDateUtil.setPrecision(parsed, "day", "low"));
-	const clock =
-		parsed.precision === "time" ? `${pad(parsed.hour)}:${pad(parsed.minute)}:00` : "00:00:00";
-	return `${pad(day.year, 4)}-${pad(day.month)}-${pad(day.day)}T${clock}`;
+const localDateTime = (date: PartialDate): string => {
+	const { year, month, day, hour, minute } = date.withPrecision("time");
+	return `${pad(year, 4)}-${pad(month)}-${pad(day)}T${pad(hour)}:${pad(minute)}:00`;
+};
+
+const daysFrom = (first: PartialDate.Day, last: PartialDate.Day): number =>
+	Math.round(
+		(last.with({ timeZoneId: "UTC" }).startEpochMilliseconds -
+			first.with({ timeZoneId: "UTC" }).startEpochMilliseconds) /
+			86_400_000,
+	);
+
+const exactDuration = (milliseconds: number): string => {
+	const minutes = Math.round(milliseconds / 60_000);
+	const hours = Math.floor(minutes / 60);
+	if (minutes === 0) return "PT0S";
+	return `PT${hours ? `${hours}H` : ""}${minutes % 60 ? `${minutes % 60}M` : ""}`;
 };
 
 /**
@@ -56,36 +72,48 @@ const localDateTime = (parsed: PartialDate.Parsed): string => {
  * event counts whole days, and its OpenEvnt end names the last of them, so the
  * duration has to reach past it.
  */
-const durationBetween = (start: PartialDate, end: PartialDate | undefined): string | undefined => {
-	const parsed = PartialDateUtil.parse(start);
+const durationBetween = (
+	start: PartialDateString,
+	end: PartialDateString | undefined,
+): string | undefined => {
+	const from = PartialDate.from(start);
 
-	if (parsed.precision !== "time") {
-		const first = PartialDateUtil.asPlainDate(PartialDateUtil.setPrecision(parsed, "day", "low"));
-		const last = PartialDateUtil.asPlainDate(
-			PartialDateUtil.setPrecision(end ?? start, "day", "high"),
-		);
-		return `P${first.until(last).days + 1}D`;
+	if (!from.has("time")) {
+		const first = from.withPrecision("day", "first");
+		const last = PartialDate.from(end ?? start).withPrecision("day", "last");
+		return `P${daysFrom(first, last) + 1}D`;
 	}
 
 	if (!end) return undefined;
 
-	return PartialDateUtil.toInstant(end, "high")
-		.since(PartialDateUtil.toInstant(start, "low"), { largestUnit: "hour" })
-		.toString();
+	return exactDuration(PartialDate.from(end).endEpochMilliseconds - from.startEpochMilliseconds);
 };
 
-const endFromDuration = (start: PartialDate, duration: string): PartialDate | undefined => {
+const DURATION_PATTERN =
+	/^P(?:(?<weeks>\d+)W)?(?:(?<days>\d+)D)?(?:T(?:(?<hours>\d+)H)?(?:(?<minutes>\d+)M)?(?:(?<seconds>\d+)(?:\.\d+)?S)?)?$/;
+
+/** Weeks and days in a JSCalendar duration follow the wall clock; hours and less are exact. */
+const endFromDuration = (
+	start: PartialDateString,
+	duration: string,
+): PartialDateString | undefined => {
+	const parts = DURATION_PATTERN.exec(duration)?.groups;
+	if (!parts || duration === "P" || duration.endsWith("T")) return undefined;
+	const amount = (unit: string) => Number(parts[unit] ?? 0);
+
+	const from = PartialDate.from(start);
+	// A dateless duration is exclusive of the day it lands on.
+	const timed = from.has("time");
+	const days = amount("weeks") * 7 + amount("days") - (timed ? 0 : 1);
+	const exact = ((amount("hours") * 60 + amount("minutes")) * 60 + amount("seconds")) * 1000;
+
 	try {
-		const shifted = PartialDateUtil.asZonedDateTime(
-			PartialDateUtil.setPrecision(start, "time", "low"),
-		).add(Temporal.Duration.from(duration));
-
-		// A dateless duration is exclusive of the day it lands on.
-		const timed = PartialDateUtil.getPrecision(start) === "time";
-		const landed = timed ? shifted : shifted.subtract({ days: 1 });
-		const formatted = PartialDateUtil.format(PartialDateUtil.parsedFromTemporal(landed));
-
-		return timed ? formatted : PartialDateUtil.setPrecision(formatted, "day", "low");
+		const wallClock = addDays(from.withPrecision("time"), days);
+		const landed = PartialDate.fromEpochMilliseconds(
+			wallClock.startEpochMilliseconds + exact,
+			from.timeZoneId,
+		);
+		return (timed ? landed : landed.toDay()).toString();
 	} catch {
 		return undefined;
 	}
@@ -95,11 +123,11 @@ const localDateTimePattern = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::\d{2})
 
 const readLocalDateTime = (
 	value: string,
-	timeZone: string | undefined,
+	timeZoneId: string,
 	showWithoutTime: boolean,
-): PartialDate | undefined => {
+): PartialDateString | undefined => {
 	const match = localDateTimePattern.exec(value);
-	if (!match) return parseDateString(value);
+	if (!match) return parseDateString(value, timeZoneId);
 
 	const [year, month, day, hour, minute] = match.slice(1).map(Number) as [
 		number,
@@ -109,35 +137,22 @@ const readLocalDateTime = (
 		number,
 	];
 
-	return PartialDateUtil.format({
-		year,
-		month,
-		day,
-		hour,
-		minute,
-		timezone: timeZone ?? "UTC",
-		precision: showWithoutTime ? "day" : "time",
-	} as PartialDate.Parsed);
-};
-
-const stableUid = (name: string, start?: string): string => {
-	let hash = 0;
-	const input = name + (start ?? "");
-	for (let i = 0; i < input.length; i++) {
-		hash = (hash * 31 + input.charCodeAt(i)) | 0;
+	try {
+		const date = PartialDate.from({ year, month, day, hour, minute, timeZoneId });
+		return (showWithoutTime ? date.withPrecision("day") : date).toString();
+	} catch {
+		return undefined;
 	}
-	return `urn:evnt:${Math.abs(hash).toString(36)}`;
 };
 
-export const jscalendar: FormatConverter = {
+export const jscalendar = {
 	name: "JSCalendar",
 	description: "JSCalendar (RFC 8984) JSON calendar format",
 	extensions: ["json", "jscalendar"],
 	mimeTypes: ["application/jscalendar+json", "application/json"],
 
-	from: (input: string, opts?: ConvertOptions): OpenEvnt => {
+	from: (data: JsonObject, opts?: ConvertOptions): OpenEvnt => {
 		const language = opts?.language ?? "en";
-		const data = JSON.parse(input);
 
 		const title = asNonEmptyString(data.title);
 		const description = asNonEmptyString(data.description);
@@ -148,11 +163,10 @@ export const jscalendar: FormatConverter = {
 		const showWithoutTime = data.showWithoutTime === true;
 		const effectiveLanguage = asNonEmptyString(data.locale) ?? language;
 
-		const timeZone = asNonEmptyString(data.timeZone);
+		const timeZoneId = asNonEmptyString(data.timeZone) ?? opts?.timezone ?? "UTC";
 
-		const venues: NonNullable<OpenEvnt["venues"]> = [];
-		let venueCounter = 0;
-		const nextVenueId = (): string => `jsc:${venueCounter++}`;
+		const components: AnyComponent[] = [];
+		let venue: Venue | undefined;
 
 		if (data.locations && isRecord(data.locations)) {
 			for (const loc of Object.values(data.locations) as Array<{
@@ -167,170 +181,133 @@ export const jscalendar: FormatConverter = {
 					: undefined;
 
 				if (loc.type === "virtual") {
-					venues.push({
-						id: nextVenueId(),
-						$type: "directory.evnt.venue.online",
-						name: createTranslations(
-							locName ?? `Online Venue ${venues.length + 1}`,
-							effectiveLanguage,
-						),
-						url: firstLinkHref,
-					});
-				} else if (loc.type === "physical") {
-					venues.push({
-						id: nextVenueId(),
-						$type: "directory.evnt.venue.physical",
-						name: createTranslations(locName ?? `Venue ${venues.length + 1}`, effectiveLanguage),
-						address: loc.description ? { addr: loc.description } : undefined,
-					});
-				} else {
-					venues.push({
-						id: nextVenueId(),
-						$type: "directory.evnt.venue.unknown",
-						name: createTranslations(locName ?? `Location ${venues.length + 1}`, effectiveLanguage),
-					});
+					if (firstLinkHref) components.push(link(firstLinkHref, locName, effectiveLanguage));
+					continue;
 				}
+
+				const address = loc.type === "physical" ? asNonEmptyString(loc.description) : undefined;
+				if (venue || !(locName || address)) continue;
+				venue = { name: createTranslations(locName, effectiveLanguage), address };
 			}
 		}
 
-		const components: NonNullable<OpenEvnt["components"]> = [];
-
 		if (description) {
-			components.push({
-				$type: "directory.evnt.richtext.markdown",
-				language: effectiveLanguage,
-				content: description,
-			});
+			components.push(
+				data.descriptionContentType === "text/markdown"
+					? markdownText(description, effectiveLanguage)
+					: plainText(description, effectiveLanguage),
+			);
 		}
 
 		if (data.links && isRecord(data.links)) {
-			for (const link of Object.values(data.links) as JscLink[]) {
-				const href = asNonEmptyString(link.href);
-				if (href) {
-					components.push({
-						$type: "directory.evnt.component.link",
-						url: href,
-						...(link.title ? { name: createTranslations(link.title, effectiveLanguage) } : {}),
-					});
-				}
+			for (const jscLink of Object.values(data.links) as JscLink[]) {
+				const href = asNonEmptyString(jscLink.href);
+				if (href && jscLink.rel === "source")
+					components.push({ $type: "directory.evnt.component.source#0", url: href });
+				else if (href) components.push(link(href, jscLink.title, effectiveLanguage));
 			}
 		}
 
-		const parsedStart = start ? readLocalDateTime(start, timeZone, showWithoutTime) : undefined;
+		const parsedStart = start ? readLocalDateTime(start, timeZoneId, showWithoutTime) : undefined;
 		const parsedEnd = end
-			? readLocalDateTime(end, timeZone, showWithoutTime)
+			? readLocalDateTime(end, timeZoneId, showWithoutTime)
 			: parsedStart && duration
 				? endFromDuration(parsedStart, duration)
 				: undefined;
 
 		return {
-			v: "0.1",
-			name: title
-				? createTranslations(title, effectiveLanguage)
-				: { [effectiveLanguage]: "Untitled Event" },
+			v: "0.2",
+			id: documentId(opts),
+			name: createTranslations(title, effectiveLanguage) ?? {
+				[effectiveLanguage]: "Untitled Event",
+			},
 			status,
-			venues: venues.length > 0 ? venues : undefined,
-			instances:
-				parsedStart || parsedEnd || venues.length > 0
-					? [{ venueIds: venues.map((v) => v.id), start: parsedStart, end: parsedEnd }]
-					: undefined,
-			components: components.length > 0 ? components : undefined,
+			venue,
+			occurrences: parsedStart || parsedEnd ? [{ start: parsedStart, end: parsedEnd }] : undefined,
+			components: nonEmpty(components),
 		};
 	},
 
-	to: (data: OpenEvnt, opts?: ConvertOptions): string => {
+	to: (data: OpenEvnt, opts?: ConvertOptions): JsonObject => {
 		const language = opts?.language ?? "en";
 		const pickTranslation = (translations: Translations | undefined): string | undefined =>
 			translate(translations, [language, "en", ...Object.keys(translations ?? {})]);
 
 		const locations: Record<string, Record<string, unknown>> = {};
-		let locIndex = 0;
-		for (const venue of data.venues ?? []) {
-			const loc: Record<string, unknown> = { "@type": "Location" };
-			const venueName = pickTranslation(venue.name);
+		if (data.venue) {
+			const loc: Record<string, unknown> = { "@type": "Location", type: "physical" };
+			const venueName = pickTranslation(data.venue.name);
 			if (venueName) loc.name = venueName;
-
-			if (venue.$type === "directory.evnt.venue.online") {
-				loc.type = "virtual";
-				if (venue.url) loc.links = { "link-0": { "@type": "Link", href: venue.url } };
-			} else if (venue.$type === "directory.evnt.venue.physical") {
-				loc.type = "physical";
-				if (venue.address?.addr) loc.description = venue.address.addr;
-			}
-
-			locations[`loc-${locIndex++}`] = loc;
+			if (data.venue.address) loc.description = data.venue.address;
+			locations["loc-0"] = loc;
 		}
 
 		const links: Record<string, Record<string, unknown>> = {};
 		let linkIndex = 0;
-		let description: string | undefined;
 
 		for (const component of data.components ?? []) {
-			const c = component as Record<string, unknown>;
-			const type = c.$type as string;
-
-			if (type === "directory.evnt.component.link") {
-				const url = asNonEmptyString(c.url);
-				if (url) {
-					const link: Record<string, unknown> = { "@type": "Link", href: url };
-					const title = pickTranslation(c.name as Translations | undefined);
-					if (title) link.title = title;
-					links[`link-${linkIndex++}`] = link;
-				}
-			} else if (type === "directory.evnt.component.source") {
-				const url = asNonEmptyString(c.url);
-				if (url) {
-					links[`link-${linkIndex++}`] = { "@type": "Link", href: url, rel: "source" };
-				}
-			} else if (type === "directory.evnt.richtext.markdown" && !description) {
-				if (typeof c.content === "string") description = c.content;
+			if (isLink(component)) {
+				const jscLink: Record<string, unknown> = { "@type": "Link", href: component.url };
+				const title = pickTranslation(component.name);
+				if (title) jscLink.title = title;
+				links[`link-${linkIndex++}`] = jscLink;
+			} else if (isSource(component)) {
+				links[`link-${linkIndex++}`] = { "@type": "Link", href: component.url, rel: "source" };
 			}
 		}
 
-		const title = pickTranslation(data.name) ?? "Untitled Event";
+		const description = findDescription(data.components, [language, "en"]);
 
-		const buildEvent = (instance: EventInstance | undefined): Record<string, unknown> => {
+		const title = pickTranslation(data.name) ?? "Untitled Event";
+		const uid = opts?.uid ?? data.id;
+
+		const buildEvent = (
+			occurrence: Occurrence | undefined,
+			eventUid: string,
+		): Record<string, unknown> => {
 			const event: Record<string, unknown> = {
 				"@type": "Event",
-				uid: stableUid(title, instance?.start),
+				uid: eventUid,
 				title,
 			};
 
-			if (instance?.start) {
-				const parsed = PartialDateUtil.parse(instance.start);
-				event.start = localDateTime(parsed);
-				if (parsed.precision === "time") event.timeZone = parsed.timezone;
+			if (occurrence?.start) {
+				const start = PartialDate.from(occurrence.start);
+				event.start = localDateTime(start);
+				if (start.has("time")) event.timeZone = start.timeZoneId;
 				else event.showWithoutTime = true;
 
-				const duration = durationBetween(instance.start, instance.end);
+				const duration = durationBetween(occurrence.start, occurrence.end);
 				if (duration) event.duration = duration;
 			}
 
 			if (Object.keys(locations).length > 0) event.locations = locations;
 			if (description) {
-				event.description = description;
-				event.descriptionContentType = "text/markdown";
+				event.description = description.text;
+				if (description.mediaType === "text/markdown")
+					event.descriptionContentType = "text/markdown";
 			}
 			if (Object.keys(links).length > 0) event.links = links;
 
-			const jscStatus = toJscStatus(instance?.status ?? data.status);
+			const jscStatus = toJscStatus(occurrence?.status ?? data.status);
 			if (jscStatus) event.status = jscStatus;
 
 			return event;
 		};
 
-		const dated = data.instances?.filter((instance) => instance.start || instance.end) ?? [];
+		const dated =
+			data.occurrences?.filter((occurrence) => occurrence.start || occurrence.end) ?? [];
 
 		// JSCalendar has no way to hold several occurrences in one Event, so a
-		// series becomes a Group rather than losing every instance but one.
+		// series becomes a Group rather than losing every occurrence but one.
 		if (dated.length > 1) {
-			return JSON.stringify(
-				{ "@type": "Group", uid: stableUid(title), entries: dated.map(buildEvent) },
-				null,
-				"\t",
-			);
+			return {
+				"@type": "Group",
+				uid,
+				entries: dated.map((occurrence, index) => buildEvent(occurrence, `${uid}#${index}`)),
+			};
 		}
 
-		return JSON.stringify(buildEvent(dated[0] ?? data.instances?.[0]), null, "\t");
+		return buildEvent(dated[0] ?? data.occurrences?.[0], uid);
 	},
-};
+} satisfies FormatConverter<JsonObject>;

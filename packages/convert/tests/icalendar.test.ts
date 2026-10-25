@@ -1,25 +1,19 @@
-import "temporal-polyfill-lite/global";
 import { describe, expect, test } from "vitest";
 import type { OpenEvnt } from "@evnt/types";
 import { icalendar } from "../src/formats/icalendar";
+import { expectValid } from "./valid";
 
 const { from, to } = icalendar;
-const convertFromICalendar = from!;
-const convertToICalendar = to!;
+const convertFromICalendar = from;
+const convertToICalendar = to;
 
 const timedEvent: OpenEvnt = {
-	v: "0.1",
+	v: "0.2",
+	id: "https://example.com/meetup.evnt.json",
 	name: { en: "Evening Meetup" },
-	venues: [
+	venue: { name: { en: "Hezarfen Pub" } },
+	occurrences: [
 		{
-			id: "venue-1",
-			name: { en: "Hezarfen Pub" },
-			$type: "directory.evnt.venue.physical",
-		},
-	],
-	instances: [
-		{
-			venueIds: ["venue-1"],
 			start: "2026-09-06T18:00[Europe/Istanbul]",
 			end: "2026-09-06T22:00[Europe/Istanbul]",
 		},
@@ -27,34 +21,21 @@ const timedEvent: OpenEvnt = {
 };
 
 const allDayEvent: OpenEvnt = {
-	v: "0.1",
+	v: "0.2",
+	id: "https://example.com/festival.evnt.json",
 	name: { en: "Weekend Festival" },
-	instances: [{ venueIds: [], start: "2026-08-15[UTC]", end: "2026-08-16[UTC]" }],
+	occurrences: [{ start: "2026-08-15[UTC]", end: "2026-08-16[UTC]" }],
 };
 
 const series: OpenEvnt = {
-	v: "0.1",
+	v: "0.2",
+	id: "https://example.com/weekly.evnt.json",
 	name: { en: "Weekly Meetup" },
-	status: "planned",
-	venues: [
-		{ id: "a", name: { en: "Hall A" }, $type: "directory.evnt.venue.unknown" },
-		{ id: "b", name: { en: "Hall B" }, $type: "directory.evnt.venue.unknown" },
-	],
-	instances: [
-		{
-			id: "week-1",
-			venueIds: ["a"],
-			start: "2026-06-01T09:00[UTC]",
-			end: "2026-06-01T17:00[UTC]",
-		},
-		{
-			id: "week-2",
-			venueIds: ["b"],
-			status: "cancelled",
-			start: "2026-06-08T09:00[UTC]",
-			end: "2026-06-08T17:00[UTC]",
-		},
-		{ venueIds: ["a"], start: "2026-06-15T09:00[UTC]", end: "2026-06-15T17:00[UTC]" },
+	venue: { name: { en: "Hall A" } },
+	occurrences: [
+		{ start: "2026-06-01T09:00[UTC]", end: "2026-06-01T17:00[UTC]" },
+		{ status: "cancelled", start: "2026-06-08T09:00[UTC]", end: "2026-06-08T17:00[UTC]" },
+		{ start: "2026-06-15T09:00[UTC]", end: "2026-06-15T17:00[UTC]" },
 	],
 };
 
@@ -78,9 +59,9 @@ describe("icalendar converter", () => {
 		expect(propertyLine(ics, "DTSTAMP")).toBeDefined();
 	});
 
-	test("derives a UID that is stable across conversions of the same event", () => {
+	test("uses the event id as the UID", () => {
 		expect(propertyLine(convertToICalendar(timedEvent), "UID")).toBe(
-			propertyLine(convertToICalendar(timedEvent), "UID"),
+			"UID:https://example.com/meetup.evnt.json",
 		);
 	});
 
@@ -107,9 +88,10 @@ describe("icalendar converter", () => {
 
 	test("gives a single-day event a full day of elapsed time", () => {
 		const ics = convertToICalendar({
-			v: "0.1",
+			v: "0.2",
+			id: "https://example.com/one-day.evnt.json",
 			name: { en: "One Day Only" },
-			instances: [{ venueIds: [], start: "2026-08-15[UTC]" }],
+			occurrences: [{ start: "2026-08-15[UTC]" }],
 		});
 
 		expect(propertyLine(ics, "DTSTART")).toBe("DTSTART;VALUE=DATE:20260815");
@@ -119,23 +101,25 @@ describe("icalendar converter", () => {
 	test("round-trips an all-day event without shifting its end", () => {
 		const result = convertFromICalendar(convertToICalendar(allDayEvent));
 
-		expect(result.instances?.[0]?.start).toBe("2026-08-15[UTC]");
-		expect(result.instances?.[0]?.end).toBe("2026-08-16[UTC]");
+		expectValid(result);
+		expect(result.occurrences).toEqual([{ start: "2026-08-15[UTC]", end: "2026-08-16[UTC]" }]);
 	});
 
 	test("round-trips a timed event to the same instant", () => {
 		const result = convertFromICalendar(convertToICalendar(timedEvent));
 
-		expect(result.instances?.[0]?.start).toBe("2026-09-06T15:00[UTC]");
-		expect(result.instances?.[0]?.end).toBe("2026-09-06T19:00[UTC]");
+		expectValid(result);
+		expect(result.occurrences).toEqual([
+			{ start: "2026-09-06T15:00[UTC]", end: "2026-09-06T19:00[UTC]" },
+		]);
 	});
 
 	test("carries the venue, description and link across", () => {
 		const ics = convertToICalendar({
 			...timedEvent,
 			components: [
-				{ $type: "directory.evnt.richtext.markdown", content: "Come along." },
-				{ $type: "directory.evnt.component.link", url: "https://example.com/meetup" },
+				{ $type: "directory.evnt.text.markdown#0", content: { en: "Come along." } },
+				{ $type: "directory.evnt.component.link#0", url: "https://example.com/meetup" },
 			],
 		});
 
@@ -144,7 +128,7 @@ describe("icalendar converter", () => {
 		expect(propertyLine(ics, "URL")).toBe("URL:https://example.com/meetup");
 	});
 
-	test("gives each instance its own VEVENT rather than one covering span", () => {
+	test("gives each occurrence its own VEVENT rather than one covering span", () => {
 		const ics = convertToICalendar(series);
 		const starts = ics.split("\r\n").filter((line) => line.startsWith("DTSTART"));
 
@@ -156,7 +140,7 @@ describe("icalendar converter", () => {
 		]);
 	});
 
-	test("gives each instance of a series a distinct UID", () => {
+	test("gives each occurrence of a series a distinct UID", () => {
 		const uids = convertToICalendar(series)
 			.split("\r\n")
 			.filter((line) => line.startsWith("UID:"));
@@ -164,19 +148,19 @@ describe("icalendar converter", () => {
 		expect(new Set(uids).size).toBe(3);
 	});
 
-	test("suffixes a supplied UID with the instance id", () => {
+	test("suffixes a supplied UID with the occurrence index", () => {
 		const uids = convertToICalendar(series, { uid: "at://did:plc:example/event/1" })
 			.split("\r\n")
 			.filter((line) => line.startsWith("UID:"));
 
 		expect(uids).toEqual([
-			"UID:at://did:plc:example/event/1#week-1",
-			"UID:at://did:plc:example/event/1#week-2",
+			"UID:at://did:plc:example/event/1#0",
+			"UID:at://did:plc:example/event/1#1",
 			"UID:at://did:plc:example/event/1#2",
 		]);
 	});
 
-	test("groups the instances of a series with a shared RELATED-TO", () => {
+	test("groups the occurrences of a series with a shared RELATED-TO", () => {
 		const related = convertToICalendar(series, { uid: "at://did:plc:example/event/1" })
 			.split("\r\n")
 			.filter((line) => line.startsWith("RELATED-TO:"));
@@ -188,43 +172,75 @@ describe("icalendar converter", () => {
 		]);
 	});
 
-	test("leaves a single-instance event ungrouped", () => {
+	test("leaves a single-occurrence event ungrouped", () => {
 		expect(convertToICalendar(timedEvent)).not.toContain("RELATED-TO");
 	});
 
-	test("takes the venue of each instance rather than the first venue of the event", () => {
+	test("puts the venue on every occurrence", () => {
 		const locations = convertToICalendar(series)
 			.split("\r\n")
 			.filter((line) => line.startsWith("LOCATION:"));
 
-		expect(locations).toEqual(["LOCATION:Hall A", "LOCATION:Hall B", "LOCATION:Hall A"]);
+		expect(locations).toEqual(["LOCATION:Hall A", "LOCATION:Hall A", "LOCATION:Hall A"]);
 	});
 
-	test("carries the status of an individual instance", () => {
+	test("falls back to the address when the venue has no name", () => {
+		const ics = convertToICalendar({ ...timedEvent, venue: { address: "Laisvės pr. 5, Vilnius" } });
+
+		expect(propertyLine(ics, "LOCATION")).toBe("LOCATION:Laisvės pr. 5\\, Vilnius");
+	});
+
+	test("carries the status of an individual occurrence", () => {
 		const statuses = convertToICalendar(series)
 			.split("\r\n")
-			.filter((line) => line.startsWith("STATUS:"));
+			.filter((line) => line.startsWith("STATUS:") || line === "END:VEVENT");
 
-		expect(statuses).toEqual(["STATUS:CONFIRMED", "STATUS:CANCELLED", "STATUS:CONFIRMED"]);
+		expect(statuses).toEqual(["END:VEVENT", "STATUS:CANCELLED", "END:VEVENT", "END:VEVENT"]);
 	});
 
-	test("round-trips a series back into separate instances", () => {
+	test("round-trips a series back into separate occurrences", () => {
 		const result = convertFromICalendar(convertToICalendar(series));
 
-		expect(result.instances).toHaveLength(3);
-		expect(result.instances?.[0]?.start).toBe("2026-06-01T09:00[UTC]");
-		expect(result.instances?.[2]?.start).toBe("2026-06-15T09:00[UTC]");
-		expect(result.status).toBe("planned");
-		expect(result.instances?.[1]?.status).toBe("cancelled");
-		expect(result.instances?.[0]?.status).toBeUndefined();
+		expectValid(result);
+		expect(result.occurrences).toHaveLength(3);
+		expect(result.occurrences?.[0]?.start).toBe("2026-06-01T09:00[UTC]");
+		expect(result.occurrences?.[2]?.start).toBe("2026-06-15T09:00[UTC]");
+		expect(result.status).toBeUndefined();
+		expect(result.occurrences?.[1]?.status).toBe("cancelled");
+		expect(result.occurrences?.[0]?.status).toBeUndefined();
+		expect(result.venue).toEqual({ name: { en: "Hall A" } });
 	});
 
-	test("reuses one venue across the instances that share it", () => {
-		const result = convertFromICalendar(convertToICalendar(series));
+	test("reads a wall time in the zone its TZID names", () => {
+		const result = convertFromICalendar(
+			[
+				"BEGIN:VCALENDAR",
+				"VERSION:2.0",
+				"BEGIN:VEVENT",
+				"UID:1",
+				"SUMMARY:Zoned",
+				"DTSTART;TZID=Europe/Vilnius:20261114T180000",
+				"END:VEVENT",
+				"BEGIN:VEVENT",
+				"UID:2",
+				"SUMMARY:Zoned",
+				"DTSTART;TZID=FLE Standard Time:20261121T180000",
+				"END:VEVENT",
+				"BEGIN:VEVENT",
+				"UID:3",
+				"SUMMARY:Zoned",
+				"DTSTART:20261128T180000",
+				"END:VEVENT",
+				"END:VCALENDAR",
+			].join("\r\n"),
+			{ timezone: "Europe/Riga" },
+		);
 
-		expect(result.venues).toHaveLength(2);
-		expect(result.instances?.[0]?.venueIds).toEqual(result.instances?.[2]?.venueIds);
-		expect(result.instances?.[1]?.venueIds).not.toEqual(result.instances?.[0]?.venueIds);
+		expect(result.occurrences?.map((occurrence) => occurrence.start)).toEqual([
+			"2026-11-14T18:00[Europe/Vilnius]",
+			"2026-11-21T18:00[Europe/Riga]",
+			"2026-11-28T18:00[Europe/Riga]",
+		]);
 	});
 
 	test("throws when the input holds no VEVENT", () => {

@@ -8,8 +8,15 @@
 		"pretty",
 		"printing"
 	],
+	"homepage": "https://evnt.directory",
+	"bugs": "https://github.com/openevnt/openevnt-js/issues",
 	"license": "MIT",
 	"author": "Open Evnt Contributors",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/openevnt/openevnt-js.git",
+		"directory": "packages/pretty"
+	},
 	"files": [
 		"./dist"
 	],
@@ -31,7 +38,6 @@
 	},
 	"devDependencies": {
 		"@repo/typescript-config": "workspace:^",
-		"temporal-polyfill-lite": "^0.2.0",
 		"typescript": "^6.0.3"
 	}
 }

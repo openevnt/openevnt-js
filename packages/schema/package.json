@@ -1,19 +1,20 @@
 {
 	"name": "@evnt/schema",
-	"version": "0.1.2",
-	"description": "Zod Schemas for OpenEvnt",
+	"version": "0.2.0",
+	"description": "Open Evnt document validator, a Standard Schema with no dependencies",
 	"keywords": [
 		"event",
 		"open evnt",
 		"schema",
-		"zod"
+		"standard schema"
 	],
 	"homepage": "https://evnt.directory",
+	"bugs": "https://github.com/openevnt/openevnt-js/issues",
 	"license": "MIT",
 	"author": "Open Evnt Contributors",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/openevnt/evnt.git",
+		"url": "https://github.com/openevnt/openevnt-js.git",
 		"directory": "packages/schema"
 	},
 	"files": [
@@ -32,14 +33,10 @@
 	},
 	"dependencies": {
 		"@evnt/partial-date": "workspace:^",
-		"@evnt/translations": "workspace:^",
 		"@evnt/types": "workspace:^"
 	},
 	"devDependencies": {
 		"@repo/typescript-config": "workspace:^",
 		"typescript": "^6.0.3"
-	},
-	"peerDependencies": {
-		"zod": "^4"
 	}
 }

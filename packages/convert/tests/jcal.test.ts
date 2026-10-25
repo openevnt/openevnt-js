@@ -1,14 +1,14 @@
-import "temporal-polyfill-lite/global";
 import { describe, expect, test } from "vitest";
 import type { OpenEvnt } from "@evnt/types";
-import { jcal } from "../src/formats/jcal";
+import { jcal, type JCalComponent } from "../src/formats/jcal";
+import { expectValid } from "./valid";
 
 const { from, to } = jcal;
-const convertFromJCal = from!;
-const convertToJCal = to!;
+const convertFromJCal = from;
+const convertToJCal = to;
 
 describe("jcal converter", () => {
-	test("converts jCal VEVENT into OpenEvnt with physical venue", () => {
+	test("converts jCal VEVENT into OpenEvnt with a venue", () => {
 		const jcalData = [
 			"vcalendar",
 			[],
@@ -29,23 +29,20 @@ describe("jcal converter", () => {
 			],
 		];
 
-		const eventData = convertFromJCal(JSON.stringify(jcalData));
+		const eventData = convertFromJCal(jcalData);
 
-		expect(eventData.v).toBe("0.1");
+		expectValid(eventData);
+		expect(eventData.v).toBe("0.2");
 		expect(eventData.name.en).toBe("Community Meetup");
-		expect(eventData.instances).toHaveLength(1);
-		expect(eventData.instances?.[0]?.start).toBeDefined();
-		expect(eventData.instances?.[0]?.end).toBeDefined();
-		expect(eventData.venues).toHaveLength(1);
-		expect(eventData.venues?.[0]?.$type).toBe("directory.evnt.venue.unknown");
-		expect(eventData.venues?.[0]?.name.en).toBe("Community Hall, Main St 1");
-		expect(eventData.status).toBe("planned");
-		expect(eventData.components?.some((c) => c.$type === "directory.evnt.richtext.markdown")).toBe(
-			true,
-		);
-		expect(eventData.components?.some((c) => c.$type === "directory.evnt.component.link")).toBe(
-			true,
-		);
+		expect(eventData.occurrences).toEqual([
+			{ start: "2026-07-10T15:30[UTC]", end: "2026-07-10T18:00[UTC]" },
+		]);
+		expect(eventData.venue).toEqual({ name: { en: "Community Hall, Main St 1" } });
+		expect(eventData.status).toBeUndefined();
+		expect(eventData.components).toEqual([
+			{ $type: "directory.evnt.text.plain#0", content: { en: "Weekly gathering for organizers." } },
+			{ $type: "directory.evnt.component.link#0", url: "https://example.com/meetup" },
+		]);
 	});
 
 	test("reads an exclusive all-day DTEND back as the last day of the event", () => {
@@ -65,11 +62,11 @@ describe("jcal converter", () => {
 			],
 		];
 
-		const eventData = convertFromJCal(JSON.stringify(jcalData));
+		const eventData = convertFromJCal(jcalData);
 
 		expect(eventData.name.en).toBe("All Day Festival");
-		expect(eventData.instances?.[0]?.start).toBe("2026-08-15[UTC]");
-		expect(eventData.instances?.[0]?.end).toBe("2026-08-15[UTC]");
+		expect(eventData.occurrences?.[0]?.start).toBe("2026-08-15[UTC]");
+		expect(eventData.occurrences?.[0]?.end).toBe("2026-08-15[UTC]");
 	});
 
 	test("converts jCal with cancelled status", () => {
@@ -89,7 +86,7 @@ describe("jcal converter", () => {
 			],
 		];
 
-		const eventData = convertFromJCal(JSON.stringify(jcalData));
+		const eventData = convertFromJCal(jcalData);
 
 		expect(eventData.status).toBe("cancelled");
 	});
@@ -111,51 +108,47 @@ describe("jcal converter", () => {
 			],
 		];
 
-		const eventData = convertFromJCal(JSON.stringify(jcalData));
+		const eventData = convertFromJCal(jcalData);
 
 		expect(eventData.status).toBe("uncertain");
 	});
 
 	test("throws on invalid jCal input", () => {
-		expect(() => convertFromJCal(JSON.stringify({ not: "jcal" }))).toThrow("Invalid jCal input");
+		expect(() => convertFromJCal({ not: "jcal" } as unknown as JCalComponent)).toThrow("Invalid jCal input");
 	});
 
 	test("throws on jCal without VEVENT", () => {
-		expect(() => convertFromJCal(JSON.stringify(["vcalendar", [], []]))).toThrow("No VEVENT found");
+		expect(() => convertFromJCal(["vcalendar", [], []])).toThrow("No VEVENT found");
 	});
 
-	test("converts OpenEvnt to jCal with physical venue", () => {
+	test("converts OpenEvnt to jCal with a venue", () => {
 		const input: OpenEvnt = {
-			v: "0.1",
+			v: "0.2",
+			id: "https://example.com/event.evnt.json",
 			name: { en: "Tech Conference" },
-			venues: [
+			venue: {
+				name: { en: "Convention Center" },
+				address: "123 Main St",
+				countryCode: "US",
+			},
+			occurrences: [
 				{
-					id: "venue-1",
-					name: { en: "Convention Center" },
-					$type: "directory.evnt.venue.physical",
-					address: { addr: "123 Main St", countryCode: "US" },
-				},
-			],
-			instances: [
-				{
-					venueIds: ["venue-1"],
 					start: "2026-09-20T09:00[America/New_York]",
 					end: "2026-09-20T17:00[America/New_York]",
 				},
 			],
 			components: [
-				{ $type: "directory.evnt.richtext.markdown", content: "Annual tech conference." },
-				{ $type: "directory.evnt.component.link", url: "https://techconf.example.com" },
+				{ $type: "directory.evnt.text.markdown#0", content: { en: "Annual tech conference." } },
+				{ $type: "directory.evnt.component.link#0", url: "https://techconf.example.com" },
 			],
 		};
 
-		const raw = convertToJCal(input);
-		const parsed = JSON.parse(raw);
+		const calendar = convertToJCal(input);
 
-		expect(parsed[0]).toBe("vcalendar");
-		expect(parsed[2]).toHaveLength(1);
+		expect(calendar[0]).toBe("vcalendar");
+		expect(calendar[2]).toHaveLength(1);
 
-		const vevent = parsed[2][0];
+		const vevent = calendar[2][0];
 		expect(vevent[0]).toBe("vevent");
 
 		const props = vevent[1];
@@ -175,33 +168,25 @@ describe("jcal converter", () => {
 		expect(description?.[3]).toBe("Annual tech conference.");
 	});
 
-	test("converts OpenEvnt to jCal with online venue", () => {
+	test("converts OpenEvnt to jCal without a venue", () => {
 		const input: OpenEvnt = {
-			v: "0.1",
+			v: "0.2",
+			id: "https://example.com/event.evnt.json",
 			name: { en: "Virtual Workshop" },
-			venues: [
+			components: [{ $type: "directory.evnt.component.link#0", url: "https://zoom.us/j/123456" }],
+			occurrences: [
 				{
-					id: "venue-1",
-					name: { en: "Zoom Call" },
-					$type: "directory.evnt.venue.online",
-					url: "https://zoom.us/j/123456",
-				},
-			],
-			instances: [
-				{
-					venueIds: ["venue-1"],
 					start: "2026-10-05T14:00[UTC]",
 				},
 			],
 		};
 
-		const raw = convertToJCal(input);
-		const parsed = JSON.parse(raw);
-		const vevent = parsed[2][0];
+		const calendar = convertToJCal(input);
+		const vevent = calendar[2][0];
 		const props = vevent[1];
 
-		const location = props.find((p: unknown[]) => p[0] === "location");
-		expect(location?.[3]).toBe("Zoom Call");
+		expect(props.find((p: unknown[]) => p[0] === "location")).toBeUndefined();
+		expect(props.find((p: unknown[]) => p[0] === "url")?.[3]).toBe("https://zoom.us/j/123456");
 
 		const summary = props.find((p: unknown[]) => p[0] === "summary");
 		expect(summary?.[3]).toBe("Virtual Workshop");
@@ -209,20 +194,19 @@ describe("jcal converter", () => {
 
 	test("converts OpenEvnt to jCal with date-only precision", () => {
 		const input: OpenEvnt = {
-			v: "0.1",
+			v: "0.2",
+			id: "https://example.com/event.evnt.json",
 			name: { en: "Summer Camp" },
-			instances: [
+			occurrences: [
 				{
-					venueIds: [],
 					start: "2026-07-01[UTC]",
 					end: "2026-07-07[UTC]",
 				},
 			],
 		};
 
-		const raw = convertToJCal(input);
-		const parsed = JSON.parse(raw);
-		const vevent = parsed[2][0];
+		const calendar = convertToJCal(input);
+		const vevent = calendar[2][0];
 		const props = vevent[1];
 
 		const dtstart = props.find((p: unknown[]) => p[0] === "dtstart");
@@ -231,139 +215,128 @@ describe("jcal converter", () => {
 
 	test("converts OpenEvnt to jCal with cancelled status", () => {
 		const input: OpenEvnt = {
-			v: "0.1",
+			v: "0.2",
+			id: "https://example.com/event.evnt.json",
 			name: { en: "Cancelled Show" },
 			status: "cancelled",
-			instances: [
+			occurrences: [
 				{
-					venueIds: [],
 					start: "2026-12-01[UTC]",
 				},
 			],
 		};
 
-		const raw = convertToJCal(input);
-		const parsed = JSON.parse(raw);
-		const vevent = parsed[2][0];
+		const calendar = convertToJCal(input);
+		const vevent = calendar[2][0];
 		const props = vevent[1];
 
 		const status = props.find((p: unknown[]) => p[0] === "status");
 		expect(status?.[3]).toBe("CANCELLED");
 	});
 
-	test("round-trips OpenEvnt → jCal → OpenEvnt with physical venue", () => {
+	test("round-trips OpenEvnt → jCal → OpenEvnt with a venue", () => {
 		const input: OpenEvnt = {
-			v: "0.1",
+			v: "0.2",
+			id: "https://example.com/event.evnt.json",
 			name: { en: "Art Exhibition" },
-			venues: [
+			venue: { name: { en: "City Gallery" } },
+			occurrences: [
 				{
-					id: "venue-1",
-					name: { en: "City Gallery" },
-					$type: "directory.evnt.venue.physical",
-				},
-			],
-			instances: [
-				{
-					venueIds: ["venue-1"],
 					start: "2026-11-15T10:00[Europe/London]",
 					end: "2026-11-15T20:00[Europe/London]",
 				},
 			],
-			components: [{ $type: "directory.evnt.richtext.markdown", content: "Modern art showcase." }],
+			components: [
+				{ $type: "directory.evnt.text.markdown#0", content: { en: "Modern art showcase." } },
+			],
 		};
 
-		const jcalStr = convertToJCal(input);
-		const output = convertFromJCal(jcalStr);
+		const calendar = convertToJCal(input);
+		const output = convertFromJCal(calendar);
 
-		expect(output.v).toBe("0.1");
+		expectValid(output);
+		expect(output.v).toBe("0.2");
 		expect(output.name.en).toBe("Art Exhibition");
-		expect(output.instances).toHaveLength(1);
-		expect(output.instances?.[0]?.start).toBeDefined();
-		expect(output.instances?.[0]?.end).toBeDefined();
-		expect(output.venues).toHaveLength(1);
-		expect(output.venues?.[0]?.name.en).toBe("City Gallery");
-		expect(output.components?.some((c) => c.$type === "directory.evnt.richtext.markdown")).toBe(
-			true,
-		);
+		expect(output.occurrences).toEqual([
+			{ start: "2026-11-15T10:00[UTC]", end: "2026-11-15T20:00[UTC]" },
+		]);
+		expect(output.venue).toEqual({ name: { en: "City Gallery" } });
+		expect(output.components).toEqual([
+			{ $type: "directory.evnt.text.plain#0", content: { en: "Modern art showcase." } },
+		]);
 	});
 
-	test("round-trips OpenEvnt → jCal → OpenEvnt with online venue", () => {
+	test("round-trips OpenEvnt → jCal → OpenEvnt with an online link", () => {
 		const input: OpenEvnt = {
-			v: "0.1",
+			v: "0.2",
+			id: "https://example.com/event.evnt.json",
 			name: { en: "Webinar" },
-			venues: [
-				{
-					id: "venue-1",
-					name: { en: "YouTube Live" },
-					$type: "directory.evnt.venue.online",
-					url: "https://youtube.com/live/abc",
-				},
+			components: [
+				{ $type: "directory.evnt.component.link#0", url: "https://youtube.com/live/abc" },
 			],
-			instances: [
+			occurrences: [
 				{
-					venueIds: ["venue-1"],
 					start: "2026-08-20T19:00[UTC]",
 				},
 			],
 		};
 
-		const jcalStr = convertToJCal(input);
-		const output = convertFromJCal(jcalStr);
+		const calendar = convertToJCal(input);
+		const output = convertFromJCal(calendar);
 
 		expect(output.name.en).toBe("Webinar");
-		expect(output.venues?.[0]?.name.en).toBe("YouTube Live");
-		expect(output.instances?.[0]?.start).toBeDefined();
+		expect(output.venue).toBeUndefined();
+		expect(output.components).toEqual(input.components);
+		expect(output.occurrences?.[0]?.start).toBe("2026-08-20T19:00[UTC]");
 	});
 
 	test("round-trips date-only event", () => {
 		const input: OpenEvnt = {
-			v: "0.1",
+			v: "0.2",
+			id: "https://example.com/event.evnt.json",
 			name: { en: "Holiday" },
-			instances: [
+			occurrences: [
 				{
-					venueIds: [],
 					start: "2026-12-25[UTC]",
 				},
 			],
 		};
 
-		const jcalStr = convertToJCal(input);
-		const output = convertFromJCal(jcalStr);
+		const calendar = convertToJCal(input);
+		const output = convertFromJCal(calendar);
 
 		expect(output.name.en).toBe("Holiday");
-		expect(output.instances?.[0]?.start).toBe("2026-12-25[UTC]");
+		expect(output.occurrences?.[0]?.start).toBe("2026-12-25[UTC]");
 	});
 
-	test("round-trips a multi-instance event as one VEVENT per instance", () => {
+	test("round-trips a series as one VEVENT per occurrence", () => {
 		const input: OpenEvnt = {
-			v: "0.1",
+			v: "0.2",
+			id: "https://example.com/event.evnt.json",
 			name: { en: "Conference Series" },
-			instances: [
+			occurrences: [
 				{
-					venueIds: [],
 					start: "2026-06-01T09:00[UTC]",
 					end: "2026-06-01T17:00[UTC]",
 				},
 				{
-					venueIds: [],
 					start: "2026-06-15T09:00[UTC]",
 					end: "2026-06-15T17:00[UTC]",
 				},
 			],
 		};
 
-		const jcalStr = convertToJCal(input);
-		const parsed = JSON.parse(jcalStr);
-		expect(parsed[2]).toHaveLength(2);
+		const calendar = convertToJCal(input);
+		expect(calendar[2]).toHaveLength(2);
 
 		const dtstartOf = (vevent: unknown[]) =>
 			(vevent[1] as unknown[][]).find((p) => p[0] === "dtstart")?.[3];
-		expect(dtstartOf(parsed[2][0])).toContain("2026-06-01");
-		expect(dtstartOf(parsed[2][1])).toContain("2026-06-15");
+		expect(dtstartOf(calendar[2][0])).toContain("2026-06-01");
+		expect(dtstartOf(calendar[2][1])).toContain("2026-06-15");
 
-		const output = convertFromJCal(jcalStr);
-		expect(output.instances).toHaveLength(2);
-		expect(output.instances?.[0]?.start).toBe("2026-06-01T09:00[UTC]");
-		expect(output.instances?.[1]?.end).toBe("2026-06-15T17:00[UTC]");
+		const output = convertFromJCal(calendar);
+		expect(output.occurrences).toHaveLength(2);
+		expect(output.occurrences?.[0]?.start).toBe("2026-06-01T09:00[UTC]");
+		expect(output.occurrences?.[1]?.end).toBe("2026-06-15T17:00[UTC]");
 	});
 });

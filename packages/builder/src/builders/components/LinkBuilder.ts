@@ -1,4 +1,4 @@
-import type { LinkComponent, PartialDate } from "@evnt/types";
+import type { LinkComponent } from "@evnt/types";
 import type { EventBuilder } from "../EventBuilder.js";
 import { ComponentBuilder } from "./ComponentBuilder.js";
 
@@ -6,7 +6,7 @@ export class LinkBuilder extends ComponentBuilder<LinkComponent> {
 	constructor(component?: LinkComponent, parent?: EventBuilder) {
 		super(
 			component ?? {
-				$type: "directory.evnt.component.link",
+				$type: "directory.evnt.component.link#0",
 				url: "",
 			},
 			parent,
@@ -26,16 +26,6 @@ export class LinkBuilder extends ComponentBuilder<LinkComponent> {
 
 	setDisabled(disabled: boolean) {
 		this.component.disabled = disabled;
-		return this;
-	}
-
-	setOpensAt(opensAt: PartialDate) {
-		this.component.opensAt = opensAt;
-		return this;
-	}
-
-	setClosesAt(closesAt: PartialDate) {
-		this.component.closesAt = closesAt;
 		return this;
 	}
 }

@@ -1,14 +1,11 @@
 import type { PartialDate } from "../../types/PartialDate.js";
 import type { AnyComponent } from "../component/index.js";
-import type { EventStatus } from "../event.js";
 import type { Activity } from "./activity.js";
 
-export interface EventInstance {
-	id?: string;
-	venueIds: string[];
+export interface Occurrence {
 	start?: PartialDate;
 	end?: PartialDate;
-	status?: EventStatus;
+	status?: "cancelled";
 	activities?: Activity[];
 	components?: AnyComponent[];
 }

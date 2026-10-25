@@ -1,14 +1,21 @@
 {
 	"name": "@evnt/dev",
-	"version": "0.1.4",
+	"version": "0.2.0",
 	"description": "OpenEvnt CLI for working with Open Evnt files",
 	"keywords": [
 		"cli",
 		"event",
 		"open evnt"
 	],
+	"homepage": "https://evnt.directory",
+	"bugs": "https://github.com/openevnt/openevnt-js/issues",
 	"license": "MIT",
 	"author": "Open Evnt Contributors",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/openevnt/openevnt-js.git",
+		"directory": "packages/dev"
+	},
 	"bin": {
 		"openevnt": "./dist/cli.js"
 	},
@@ -29,9 +36,7 @@
 		"@evnt/types": "workspace:*",
 		"cac": "^7.0.0",
 		"jsonc-parser": "^3.3.1",
-		"picocolors": "^1.1.1",
-		"temporal-polyfill-lite": "^0.2.3",
-		"zod": "^4.3.6"
+		"picocolors": "^1.1.1"
 	},
 	"devDependencies": {
 		"@repo/typescript-config": "workspace:*",

@@ -1,6 +1,6 @@
-import type { EventInstance, PartialDate } from "@evnt/types";
-import { PartialDateUtil } from "@evnt/partial-date";
-import type { DateGroup, DateList, DateRange, SingleDate, TimeSlot, VenueGroup } from "./types.js";
+import { PartialDate, type PartialDateString } from "@evnt/partial-date";
+import type { Occurrence } from "@evnt/types";
+import type { DateGroup, DateList, DateRange, SingleDate, TimeSlot } from "./types.js";
 
 export interface AnalyzeOptions {
 	/** Group consecutive days that share the same times into a single range
@@ -13,71 +13,42 @@ export const defaultAnalyzeOptions: AnalyzeOptions = {
 	groupConsecutiveDates: true,
 };
 
-const hasDay = (pd: PartialDate) => PartialDateUtil.has(pd, "day");
-const hasTime = (pd: PartialDate) => PartialDateUtil.has(pd, "time");
+const hasDay = (pd: PartialDateString) => PartialDate.from(pd).has("day");
+const hasTime = (pd: PartialDateString) => PartialDate.from(pd).has("time");
 
-const parseFields = (pd: PartialDate): PartialDate.Parsed.Fields =>
-	PartialDateUtil.parse(pd) as PartialDate.Parsed.Fields;
-
-const isSameDay = (a?: PartialDate, b?: PartialDate): boolean => {
-	if (!a || !b || !hasDay(a) || !hasDay(b)) return false;
-	const pa = parseFields(a);
-	const pb = parseFields(b);
-	return pa.year === pb.year && pa.month === pb.month && pa.day === pb.day;
+const dayNumber = (pd: PartialDateString): number => {
+	const { year, month, day } = PartialDate.from(pd).withPrecision("day");
+	const date = new Date(0);
+	date.setUTCFullYear(year, month - 1, day);
+	return date.getTime() / 86_400_000;
 };
 
-const isNextDay = (a: PartialDate, b: PartialDate): boolean => {
-	if (!hasDay(a) || !hasDay(b)) return false;
-	const pa = parseFields(a);
-	const pb = parseFields(b);
-	const aMs = Date.UTC(pa.year, pa.month - 1, pa.day);
-	const bMs = Date.UTC(pb.year, pb.month - 1, pb.day);
-	return bMs - aMs === 86_400_000;
-};
+const isSameDay = (a?: PartialDateString, b?: PartialDateString): boolean =>
+	!!a && !!b && hasDay(a) && hasDay(b) && dayNumber(a) === dayNumber(b);
 
-const comparePartialDate = (a: PartialDate, b: PartialDate): number => {
-	const pa = parseFields(a);
-	const pb = parseFields(b);
-	if (pa.year !== pb.year) return pa.year - pb.year;
-	if (pa.month !== pb.month) return pa.month - pb.month;
-	if (pa.day !== pb.day) return pa.day - pb.day;
-	if (pa.hour !== pb.hour) return pa.hour - pb.hour;
-	return pa.minute - pb.minute;
-};
+const isNextDay = (a: PartialDateString, b: PartialDateString): boolean =>
+	hasDay(a) && hasDay(b) && dayNumber(b) - dayNumber(a) === 1;
 
 interface DateEntry {
-	start?: PartialDate;
-	end?: PartialDate;
+	start?: PartialDateString;
+	end?: PartialDateString;
 }
 
-const timePart = (pd?: PartialDate): string => {
-	if (!pd || !hasTime(pd)) return "";
-	const parsed = PartialDateUtil.parse(pd);
-	return parsed.precision === "time" ? `${parsed.hour}:${parsed.minute}` : "";
+const timePart = (pd?: PartialDateString): string => {
+	if (!pd) return "";
+	const date = PartialDate.from(pd);
+	return date.precision === "time" ? `${date.hour}:${date.minute}` : "";
 };
 
 const getTimeKey = (entry: DateEntry): string => `${timePart(entry.start)}|${timePart(entry.end)}`;
 
-const roundToDay = (pd: PartialDate): PartialDate => {
-	if (!hasDay(pd)) return pd;
-	const p = parseFields(pd);
-	return PartialDateUtil.format({
-		year: p.year,
-		month: p.month ?? 1,
-		day: p.day ?? 1,
-		timezone: p.timezone,
-		precision: "day",
-	}) as PartialDate;
+const roundToDay = (pd: PartialDateString): PartialDateString => {
+	const date = PartialDate.from(pd);
+	return date.has("day") ? date.withPrecision("day").toString() : pd;
 };
 
-const isConsecutiveRange = (days: PartialDate[]): boolean => {
-	for (let i = 1; i < days.length; i++) {
-		const prev = parseFields(days[i - 1]!);
-		const curr = parseFields(days[i]!);
-		const prevMs = Date.UTC(prev.year, prev.month - 1, prev.day);
-		const currMs = Date.UTC(curr.year, curr.month - 1, curr.day);
-		if (currMs - prevMs !== 86_400_000) return false;
-	}
+const isConsecutiveRange = (days: PartialDateString[]): boolean => {
+	for (let i = 1; i < days.length; i++) if (!isNextDay(days[i - 1]!, days[i]!)) return false;
 	return true;
 };
 
@@ -130,7 +101,7 @@ const toDateShape = (entries: DateEntry[]): SingleDate | DateRange | DateList =>
 		return { type: "single", date: e.start ?? e.end! };
 	}
 
-	const allDays: PartialDate[] = [];
+	const allDays: PartialDateString[] = [];
 	for (const e of entries) {
 		if (e.start && hasDay(e.start)) allDays.push(roundToDay(e.start));
 	}
@@ -160,55 +131,22 @@ const dedupTimeRanges = (entries: DateEntry[]): TimeSlot[] => {
 	return ranges;
 };
 
-export const groupDates = (instances: EventInstance[], group: boolean): VenueGroup[] => {
-	const byVenue = new Map<string, EventInstance[]>();
-	for (const inst of instances) {
-		const key = JSON.stringify([...inst.venueIds].sort());
-		const g = byVenue.get(key) ?? [];
-		g.push(inst);
-		byVenue.set(key, g);
-	}
+export const groupDates = (occurrences: Occurrence[], group: boolean): DateGroup[] => {
+	const entries: DateEntry[] = occurrences
+		.map((occurrence) => ({ start: occurrence.start, end: occurrence.end }))
+		.filter((entry) => entry.start || entry.end)
+		.sort((a, b) => {
+			if (!a.start && !b.start) return 0;
+			if (!a.start) return -1;
+			if (!b.start) return 1;
+			return PartialDate.compare(a.start, b.start);
+		});
 
-	const venueGroups: VenueGroup[] = [];
-
-	for (const [, insts] of byVenue) {
-		const venueIds = [...(insts[0]?.venueIds ?? [])].sort();
-
-		const entries: DateEntry[] = insts
-			.map((i) => ({ start: i.start, end: i.end }))
-			.filter((e) => e.start || e.end)
-			.sort((a, b) => {
-				if (!a.start && !b.start) return 0;
-				if (!a.start) return -1;
-				if (!b.start) return 1;
-				return comparePartialDate(a.start, b.start);
-			});
-
-		if (entries.length === 0) continue;
-
-		const dateGroups: DateGroup[] = [];
-
-		if (group) {
-			const consolidated = mergeEntries(entries);
-			for (const g of consolidated) {
-				dateGroups.push({
-					dates: toDateShape(g.entries),
-					times: dedupTimeRanges(g.entries),
-					venueIds,
-				});
-			}
-		} else {
-			for (const e of entries) {
-				dateGroups.push({
-					dates: toDateShape([e]),
-					times: dedupTimeRanges([e]),
-					venueIds,
-				});
-			}
-		}
-
-		venueGroups.push({ venueIds, groups: dateGroups });
-	}
-
-	return venueGroups;
+	const groups = group
+		? mergeEntries(entries).map((merged) => merged.entries)
+		: entries.map((entry) => [entry]);
+	return groups.map((grouped) => ({
+		dates: toDateShape(grouped),
+		times: dedupTimeRanges(grouped),
+	}));
 };

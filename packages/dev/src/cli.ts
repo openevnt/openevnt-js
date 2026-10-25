@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import "temporal-polyfill-lite/global";
 import { readFileSync } from "node:fs";
 import cac from "cac";
 import validateDir from "./commands/validate.js";

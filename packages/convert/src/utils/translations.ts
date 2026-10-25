@@ -4,10 +4,7 @@ import type { Translations } from "@evnt/types";
 export const createTranslations = (
 	text: string | undefined | null,
 	language: string,
-): Translations => {
-	if (!text) return {};
-	return { [language]: text };
-};
+): Translations | undefined => (text ? { [language]: text } : undefined);
 
 /** Inverse — extract a single string from Translations for a preferred language. */
 export const translate = (

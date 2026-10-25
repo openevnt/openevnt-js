@@ -1,8 +1,10 @@
 import { parseDocument } from "htmlparser2";
 import type { Element, ChildNode } from "domhandler";
-import type { OpenEvnt } from "@evnt/types";
+import type { AnyComponent, OpenEvnt } from "@evnt/types";
 import { createTranslations } from "../utils/translations.js";
 import { parseDateString } from "../utils/date.js";
+import { link, plainText } from "../utils/components.js";
+import { documentId, nonEmpty } from "../utils/document.js";
 import type { FormatConverter, ConvertOptions } from "../types.js";
 
 const hasClass = (node: Element, name: string): boolean =>
@@ -25,7 +27,7 @@ const textContent = (node: ChildNode): string => {
 	return "";
 };
 
-export const hEvent: FormatConverter = {
+export const hEvent = {
 	name: "h-event",
 	description: "Microformats2 h-event (HTML)",
 	extensions: ["html", "htm"],
@@ -33,6 +35,7 @@ export const hEvent: FormatConverter = {
 
 	from: (input: string, opts?: ConvertOptions): OpenEvnt => {
 		const language = opts?.language ?? "en";
+		const timeZoneId = opts?.timezone ?? "UTC";
 		const doc = parseDocument(input);
 		const root = doc.children.find(
 			(c): c is Element => c.type === "tag" && findFirst(c, "h-event") !== undefined,
@@ -56,39 +59,23 @@ export const hEvent: FormatConverter = {
 		const endStr = pickAttr("dt-end", "datetime") ?? pick("dt-end");
 		const description = pick("p-description");
 
-		const start = startStr ? (parseDateString(startStr) ?? undefined) : undefined;
-		const end = endStr ? (parseDateString(endStr) ?? undefined) : undefined;
+		const start = startStr ? parseDateString(startStr, timeZoneId) : undefined;
+		const end = endStr ? parseDateString(endStr, timeZoneId) : undefined;
 
-		const venues: NonNullable<OpenEvnt["venues"]> = [];
-		if (location) {
-			const isUrl = /^https?:\/\//i.test(location);
-			venues.push({
-				id: "hevent:venue:0",
-				$type: isUrl ? "directory.evnt.venue.online" : "directory.evnt.venue.physical",
-				name: createTranslations(location, language),
-				...(isUrl ? { url: location } : {}),
-			});
-		}
+		const isOnline = location !== undefined && /^https?:\/\//i.test(location);
 
-		const components: NonNullable<OpenEvnt["components"]> = [];
-		if (url) components.push({ $type: "directory.evnt.component.link", url });
-		if (description) {
-			components.push({
-				$type: "directory.evnt.richtext.markdown",
-				language,
-				content: description,
-			});
-		}
+		const components: AnyComponent[] = [];
+		if (url) components.push(link(url, undefined, language));
+		if (location && isOnline) components.push(link(location, undefined, language));
+		if (description) components.push(plainText(description, language));
 
 		return {
-			v: "0.1",
-			name: name ? createTranslations(name, language) : { [language]: "Untitled Event" },
-			venues: venues.length > 0 ? venues : undefined,
-			instances:
-				start || end || venues.length > 0
-					? [{ venueIds: venues.map((v) => v.id), start, end }]
-					: undefined,
-			components: components.length > 0 ? components : undefined,
+			v: "0.2",
+			id: documentId(opts),
+			name: createTranslations(name, language) ?? { [language]: "Untitled Event" },
+			venue: location && !isOnline ? { name: { [language]: location } } : undefined,
+			occurrences: start || end ? [{ start, end }] : undefined,
+			components: nonEmpty(components),
 		};
 	},
-};
+} satisfies FormatConverter<string>;

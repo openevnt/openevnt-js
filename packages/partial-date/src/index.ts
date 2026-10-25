@@ -1,441 +1,517 @@
-import type { PartialDate } from "@evnt/types";
+import type { PartialDate as PartialDateString } from "@evnt/types";
 
-export type PlainDateString = `${number}-${number}-${number}`;
-export type PlainTimeString = `${number}:${number}`;
+export type { PartialDateString };
 
-declare module "@evnt/types" {
-	export namespace PartialDate {
-		type TimezoneIdentifier = string;
-		export type Precision = "year" | "month" | "day" | "time";
-		export type Parsed =
-			| Parsed.YearOnly
-			| Parsed.YearMonth
-			| Parsed.YearMonthDay
-			| Parsed.YearMonthDayTime;
-		export namespace Parsed {
-			export type Fields = {
-				timezone: TimezoneIdentifier;
-				year: number;
-				month: number;
-				day: number;
-				hour: number;
-				minute: number;
-			};
-			export type YearOnly = Pick<Fields, "year" | "timezone"> & { precision: "year" };
-			export type YearMonth = Pick<Fields, "year" | "month" | "timezone"> & { precision: "month" };
-			export type YearMonthDay = Pick<Fields, "year" | "month" | "day" | "timezone"> & {
-				precision: "day";
-			};
-			export type YearMonthDayTime = Fields & { precision: "time" };
+const PRECISIONS: readonly PartialDate.Precision[] = ["year", "month", "day", "time"];
+
+const PARTIAL_DATE_PATTERN =
+	/^(?<year>[0-9]{4})(?:-(?<month>[0-9]{2})(?:-(?<day>[0-9]{2})(?:T(?<hour>[0-9]{2}):(?<minute>[0-9]{2}))?)?)?\[(?<timeZoneId>[A-Za-z][A-Za-z0-9_/+-]*)\]$/;
+
+const MILLISECONDS_PER_DAY = 86_400_000;
+
+const wallClockFormats = new Map<string, Intl.DateTimeFormat>();
+
+const wallClockFormat = (timeZoneId: string): Intl.DateTimeFormat | undefined => {
+	let format = wallClockFormats.get(timeZoneId);
+	if (format) return format;
+	try {
+		format = new Intl.DateTimeFormat("en-US", {
+			timeZone: timeZoneId,
+			hourCycle: "h23",
+			era: "short",
+			year: "numeric",
+			month: "numeric",
+			day: "numeric",
+			hour: "numeric",
+			minute: "numeric",
+			second: "numeric",
+		});
+	} catch {
+		return undefined;
+	}
+	wallClockFormats.set(timeZoneId, format);
+	return format;
+};
+
+const isTimeZoneId = (timeZoneId: string) =>
+	/^[A-Za-z]/.test(timeZoneId) && wallClockFormat(timeZoneId) !== undefined;
+
+const daysInMonth = (year: number, month: number) => {
+	const date = new Date(0);
+	date.setUTCFullYear(year, month, 0);
+	return date.getUTCDate();
+};
+
+const wallClockAsEpochMilliseconds = (
+	year: number,
+	month: number,
+	day: number,
+	hour = 0,
+	minute = 0,
+	second = 0,
+) => {
+	const date = new Date(0);
+	date.setUTCFullYear(year, month - 1, day);
+	date.setUTCHours(hour, minute, second, 0);
+	return date.getTime();
+};
+
+const wallClockAt = (epochMilliseconds: number, timeZoneId: string) => {
+	const parts = Object.fromEntries(
+		wallClockFormat(timeZoneId)!
+			.formatToParts(epochMilliseconds)
+			.map((part) => [part.type, part.value]),
+	);
+	const yearOfEra = Number(parts.year);
+	return {
+		year: parts.era === "BC" ? 1 - yearOfEra : yearOfEra,
+		month: Number(parts.month),
+		day: Number(parts.day),
+		hour: Number(parts.hour),
+		minute: Number(parts.minute),
+		second: Number(parts.second),
+	};
+};
+
+const offsetAt = (epochMilliseconds: number, timeZoneId: string) => {
+	const wholeSeconds = Math.floor(epochMilliseconds / 1000) * 1000;
+	const wall = wallClockAt(wholeSeconds, timeZoneId);
+	return (
+		wallClockAsEpochMilliseconds(
+			wall.year,
+			wall.month,
+			wall.day,
+			wall.hour,
+			wall.minute,
+			wall.second,
+		) - wholeSeconds
+	);
+};
+
+const instantOfWallClock = (wall: number, timeZoneId: string) => {
+	const offsetBefore = offsetAt(wall - MILLISECONDS_PER_DAY, timeZoneId);
+	const offsetAfter = offsetAt(wall + MILLISECONDS_PER_DAY, timeZoneId);
+	const matching = [wall - offsetBefore, wall - offsetAfter].filter(
+		(instant) => instant + offsetAt(instant, timeZoneId) === wall,
+	);
+	return matching.length ? Math.min(...matching) : wall - offsetBefore;
+};
+
+const isIntegerIn = (value: number, lowest: number, highest: number) =>
+	Number.isInteger(value) && value >= lowest && value <= highest;
+
+const problemWith = (fields: PartialDate.Fields): string | undefined => {
+	const { year, month, day, hour, minute, timeZoneId } = fields;
+	if (!isIntegerIn(year, 0, 9999)) return `year ${year} is not between 0 and 9999`;
+	if (month === undefined && day !== undefined) return "a day needs a month";
+	if (day === undefined && hour !== undefined) return "a time needs a day";
+	if ((hour === undefined) !== (minute === undefined)) return "an hour and a minute go together";
+	if (month !== undefined && !isIntegerIn(month, 1, 12)) return `month ${month} does not exist`;
+	if (day !== undefined && !isIntegerIn(day, 1, daysInMonth(year, month!)))
+		return `${year}-${month} has no day ${day}`;
+	if (hour !== undefined && !isIntegerIn(hour, 0, 23)) return `hour ${hour} does not exist`;
+	if (minute !== undefined && !isIntegerIn(minute, 0, 59)) return `minute ${minute} does not exist`;
+	if (!isTimeZoneId(timeZoneId)) return `${timeZoneId} is not an IANA time zone`;
+	return undefined;
+};
+
+const fieldsOfString = (value: string): PartialDate.Fields | undefined => {
+	const groups = PARTIAL_DATE_PATTERN.exec(value)?.groups;
+	if (!groups) return undefined;
+	const numberOrUndefined = (digits: string | undefined) =>
+		digits === undefined ? undefined : Number(digits);
+	return {
+		year: Number(groups.year),
+		month: numberOrUndefined(groups.month),
+		day: numberOrUndefined(groups.day),
+		hour: numberOrUndefined(groups.hour),
+		minute: numberOrUndefined(groups.minute),
+		timeZoneId: groups.timeZoneId!,
+	};
+};
+
+const twoDigits = (value: number) => String(value).padStart(2, "0");
+
+const DEFAULT_LOCALE_FORMATS: Record<PartialDate.Precision, Intl.DateTimeFormatOptions> = {
+	year: { year: "numeric" },
+	month: { year: "numeric", month: "long" },
+	day: { year: "numeric", month: "long", day: "numeric" },
+	time: { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" },
+};
+
+const requireTemporal = () => {
+	if (typeof Temporal === "undefined")
+		throw new TypeError(
+			"Temporal is not available; load a polyfill such as temporal-polyfill-lite",
+		);
+	return Temporal;
+};
+
+export type PartialDate = PartialDate.Year | PartialDate.Month | PartialDate.Day | PartialDate.Time;
+
+export namespace PartialDate {
+	export type Precision = "year" | "month" | "day" | "time";
+
+	export interface Fields {
+		year: number;
+		month?: number | undefined;
+		day?: number | undefined;
+		hour?: number | undefined;
+		minute?: number | undefined;
+		timeZoneId: string;
+	}
+
+	export abstract class Base {
+		abstract readonly precision: Precision;
+		readonly year: number;
+		readonly timeZoneId: string;
+		readonly #fields: Fields;
+		#startEpochMilliseconds: number | undefined;
+		#endEpochMilliseconds: number | undefined;
+
+		protected constructor(fields: Fields) {
+			const problem = problemWith(fields);
+			if (problem) throw new RangeError(`Not a PartialDate: ${problem}`);
+			this.#fields = fields;
+			this.year = fields.year;
+			this.timeZoneId = fields.timeZoneId;
 		}
-	}
-}
 
-export const PartialDateRegex =
-	/^(?<year>\d{4})(?:-(?<month>\d{2})(?:-(?<day>\d{2})(?:T(?<time>(?<hour>\d{2}):(?<minute>\d{2}))?)?)?)?\[(?<timezone>[-\w/+]+)\]$/;
-
-export const PartialDateUtil = new (class {
-	// == Validation methods ==
-
-	/** Checks if a string is a valid PartialDate */
-	isValid(pd: string): pd is PartialDate {
-		return PartialDateRegex.test(pd);
-	}
-
-	// == Parsing and formatting methods ==
-
-	/**
-	 * Parses a PartialDate string into a structured object
-	 * @param pd A PartialDate string to parse into a structured object
-	 * @returns Parsed representation of the PartialDate
-	 */
-	parse(pd: PartialDate.YearOnly): PartialDate.Parsed.YearOnly;
-	parse(pd: PartialDate.YearMonth): PartialDate.Parsed.YearMonth;
-	parse(pd: PartialDate.YearMonthDay): PartialDate.Parsed.YearMonthDay;
-	parse(pd: PartialDate.YearMonthDayTime): PartialDate.Parsed.YearMonthDayTime;
-	parse(pd: PartialDate): PartialDate.Parsed;
-	parse(pd: PartialDate): PartialDate.Parsed {
-		const match = PartialDateRegex.exec(pd);
-		if (!match || !match.groups) {
-			throw new Error(`Invalid partial date format: ${pd}`);
+		has(precision: "time"): this is Time;
+		has(precision: "day"): this is Day | Time;
+		has(precision: "month"): this is Month | Day | Time;
+		has(precision: Precision): boolean;
+		has(precision: Precision): boolean {
+			return PRECISIONS.indexOf(this.precision) >= PRECISIONS.indexOf(precision);
 		}
 
-		const { year, month, day, hour, minute, timezone } = match.groups;
-		const parsed: PartialDate.Parsed.Fields = {
-			timezone: timezone!,
-			year: parseInt(year!, 10),
-			month: month ? parseInt(month, 10) : 1,
-			day: day ? parseInt(day, 10) : 1,
-			hour: hour ? parseInt(hour, 10) : 0,
-			minute: minute ? parseInt(minute, 10) : 0,
-		};
-
-		if (hour && minute) {
-			return { ...parsed, precision: "time" };
-		} else if (day) {
-			return { ...parsed, precision: "day" };
-		} else if (month) {
-			return { ...parsed, precision: "month" };
-		} else {
-			return { ...parsed, precision: "year" };
+		toYear(): Year {
+			return new Year(this.year, this.timeZoneId);
 		}
-	}
 
-	format(parsed: PartialDate.Parsed.YearOnly): PartialDate.YearOnly;
-	format(parsed: PartialDate.Parsed.YearMonth): PartialDate.YearMonth;
-	format(parsed: PartialDate.Parsed.YearMonthDay): PartialDate.YearMonthDay;
-	format(parsed: PartialDate.Parsed.YearMonthDayTime): PartialDate.YearMonthDayTime;
-	format(parsed: PartialDate.Parsed): PartialDate;
-	format(parsed: PartialDate.Parsed): PartialDate {
-		let str = parsed.year.toString();
-		if (this.has(parsed, "month")) str += `-${String(parsed.month).padStart(2, "0")}`;
-		if (this.has(parsed, "day")) str += `-${String(parsed.day).padStart(2, "0")}`;
-		if (this.has(parsed, "time"))
-			str += `T${String(parsed.hour).padStart(2, "0")}:${String(parsed.minute).padStart(2, "0")}`;
-		str += `[${parsed.timezone}]`;
-		return str as PartialDate;
-	}
-
-	// == Introspection methods ==
-
-	getPrecision(pd: PartialDate): PartialDate.Precision {
-		const parsed = this.parse(pd);
-		return parsed.precision;
-	}
-
-	has(pd: PartialDate | PartialDate.Parsed, field: "year"): true;
-	has(pd: PartialDate.Parsed, field: "time"): pd is PartialDate.Parsed.YearMonthDayTime;
-	has(
-		pd: PartialDate.Parsed,
-		field: "day",
-	): pd is PartialDate.Parsed.YearMonthDay | PartialDate.Parsed.YearMonthDayTime;
-	has(
-		pd: PartialDate.Parsed,
-		field: "month",
-	): pd is
-		| PartialDate.Parsed.YearMonth
-		| PartialDate.Parsed.YearMonthDay
-		| PartialDate.Parsed.YearMonthDayTime;
-	has(pd: PartialDate, field: "time"): pd is PartialDate.YearMonthDayTime;
-	has(pd: PartialDate, field: "day"): pd is PartialDate.YearMonthDay | PartialDate.YearMonthDayTime;
-	has(
-		pd: PartialDate,
-		field: "month",
-	): pd is PartialDate.YearMonth | PartialDate.YearMonthDay | PartialDate.YearMonthDayTime;
-	has(pd: PartialDate | PartialDate.Parsed, field: PartialDate.Precision): boolean {
-		if (field === "year") return true;
-		const parsed = typeof pd === "string" ? this.parse(pd) : pd;
-		switch (field) {
-			case "time":
-				return parsed.precision === "time";
-			case "day":
-				return parsed.precision === "day" || parsed.precision === "time";
-			case "month":
-				return (
-					parsed.precision === "month" || parsed.precision === "day" || parsed.precision === "time"
-				);
-			default:
-				return false;
-		}
-	}
-
-	/**
-	 * Determines the highest level of precision that two PartialDates have in common.
-	 * For example, if both PartialDates have the same year and month, but different days, this method would return "month".
-	 * If they have different years, it would return "none".
-	 */
-	getPrecisionEquality(a: PartialDate, b: PartialDate): PartialDate.Precision | "none" {
-		const start = this.parse(a) as PartialDate.Parsed.Fields;
-		const end = this.parse(b) as PartialDate.Parsed.Fields;
-
-		let equalPrecision: PartialDate.Precision | "none" = "none";
-		if (start.year === end.year) equalPrecision = "year";
-		if (equalPrecision === "year" && start.month === end.month) equalPrecision = "month";
-		if (equalPrecision === "month" && start.day === end.day) equalPrecision = "day";
-		if (equalPrecision === "day" && start.hour === end.hour && start.minute === end.minute)
-			equalPrecision = "time";
-		return equalPrecision;
-	}
-
-	// == Modification methods ==
-
-	lowerPrecision(
-		pd: PartialDate.YearMonthDayTime | PartialDate.YearMonthDay,
-		to: "day",
-	): PartialDate.YearMonthDay;
-	lowerPrecision(
-		pd: PartialDate.YearMonthDayTime | PartialDate.YearMonthDay | PartialDate.YearMonth,
-		to: "month",
-	): PartialDate.YearMonth;
-	lowerPrecision(
-		pd:
-			| PartialDate.YearMonthDayTime
-			| PartialDate.YearMonthDay
-			| PartialDate.YearMonth
-			| PartialDate.YearOnly,
-		to: "year",
-	): PartialDate.YearOnly;
-	lowerPrecision(pd: PartialDate, to: Exclude<PartialDate.Precision, "time">): PartialDate {
-		const { year, month, day, timezone } = this.parse(pd) as PartialDate.Parsed.Fields;
-		switch (to) {
-			case "day":
-				return this.format({ year, month, day, timezone, precision: "day" });
-			case "month":
-				return this.format({ year, month, timezone, precision: "month" });
-			case "year":
-				return this.format({ year, timezone, precision: "year" });
-		}
-	}
-
-	setPrecision(pd: PartialDate | PartialDate.Parsed, precision: "year"): PartialDate.YearOnly;
-	setPrecision(
-		pd: PartialDate | PartialDate.Parsed,
-		precision: "month",
-		mode: "low" | "high",
-	): PartialDate.YearMonth;
-	setPrecision(
-		pd: PartialDate | PartialDate.Parsed,
-		precision: "day",
-		mode: "low" | "high",
-	): PartialDate.YearMonthDay;
-	setPrecision(
-		pd: PartialDate | PartialDate.Parsed,
-		precision: "time",
-		mode: "low" | "high",
-	): PartialDate.YearMonthDayTime;
-	setPrecision(
-		pd: PartialDate | PartialDate.Parsed,
-		precision: PartialDate.Precision,
-		mode?: "low" | "high",
-	): PartialDate {
-		const parsed = (typeof pd === "string" ? this.parse(pd) : pd) as PartialDate.Parsed;
-		let { year, month, day, hour, minute, timezone } = parsed as PartialDate.Parsed.Fields;
-
-		if (mode) {
-			if (parsed.precision === "year") month = mode === "low" ? 1 : 12;
-			if (parsed.precision === "year" || parsed.precision === "month")
-				day = mode === "low" ? 1 : new Temporal.PlainYearMonth(year, month).daysInMonth;
-
-			if (parsed.precision !== "time") {
-				hour = mode === "low" ? 0 : 23;
-				minute = mode === "low" ? 0 : 59;
+		withPrecision(precision: "year"): Year;
+		withPrecision(precision: "month", fill?: "first" | "last"): Month;
+		withPrecision(precision: "day", fill?: "first" | "last"): Day;
+		withPrecision(precision: "time", fill?: "first" | "last"): Time;
+		withPrecision(precision: Precision, fill?: "first" | "last"): PartialDate;
+		withPrecision(precision: Precision, fill: "first" | "last" = "first"): PartialDate {
+			const { year, timeZoneId } = this;
+			const last = fill === "last";
+			const month = this.#fields.month ?? (last ? 12 : 1);
+			const day = this.#fields.day ?? (last ? daysInMonth(year, month) : 1);
+			switch (precision) {
+				case "year":
+					return new Year(year, timeZoneId);
+				case "month":
+					return new Month(year, month, timeZoneId);
+				case "day":
+					return new Day(year, month, day, timeZoneId);
+				case "time":
+					return new Time(
+						year,
+						month,
+						day,
+						this.#fields.hour ?? (last ? 23 : 0),
+						this.#fields.minute ?? (last ? 59 : 0),
+						timeZoneId,
+					);
 			}
 		}
 
-		switch (precision) {
-			case "year":
-				return this.format({ year, timezone, precision: "year" });
-			case "month":
-				return this.format({ year, month, timezone, precision: "month" });
-			case "day":
-				return this.format({ year, month, day, timezone, precision: "day" });
-			case "time":
-				return this.format({ year, month, day, hour, minute, timezone, precision: "time" });
+		get startEpochMilliseconds(): number {
+			const { year, month = 1, day = 1, hour, minute } = this.#fields;
+			this.#startEpochMilliseconds ??= instantOfWallClock(
+				wallClockAsEpochMilliseconds(year, month, day, hour, minute),
+				this.timeZoneId,
+			);
+			return this.#startEpochMilliseconds;
+		}
+
+		get endEpochMilliseconds(): number {
+			const { year, month = 1, day = 1 } = this.#fields;
+			this.#endEpochMilliseconds ??=
+				this.precision === "time"
+					? this.startEpochMilliseconds
+					: instantOfWallClock(
+							wallClockAsEpochMilliseconds(
+								this.precision === "year" ? year + 1 : year,
+								this.precision === "month" ? month + 1 : month,
+								this.precision === "day" ? day + 1 : day,
+							),
+							this.timeZoneId,
+						);
+			return this.#endEpochMilliseconds;
+		}
+
+		isAfter(other: Base | string): boolean {
+			const that = from(other);
+			return (
+				this.startEpochMilliseconds >= that.endEpochMilliseconds &&
+				this.startEpochMilliseconds !== that.startEpochMilliseconds
+			);
+		}
+
+		isBefore(other: Base | string): boolean {
+			return from(other).isAfter(this);
+		}
+
+		covers(epochMilliseconds: number): boolean {
+			if (this.precision === "time") return epochMilliseconds === this.startEpochMilliseconds;
+			return (
+				this.startEpochMilliseconds <= epochMilliseconds &&
+				epochMilliseconds < this.endEpochMilliseconds
+			);
+		}
+
+		contains(other: Base | string): boolean {
+			const that = from(other);
+			if (that.precision === "time") return this.covers(that.startEpochMilliseconds);
+			return (
+				this.startEpochMilliseconds <= that.startEpochMilliseconds &&
+				that.endEpochMilliseconds <= this.endEpochMilliseconds
+			);
+		}
+
+		intersects(other: Base | string): boolean {
+			const that = from(other);
+			if (this.precision === "time") return that.covers(this.startEpochMilliseconds);
+			if (that.precision === "time") return this.covers(that.startEpochMilliseconds);
+			return (
+				this.startEpochMilliseconds < that.endEpochMilliseconds &&
+				that.startEpochMilliseconds < this.endEpochMilliseconds
+			);
+		}
+
+		equals(other: Base | string): boolean {
+			return this.toString() === from(other).toString();
+		}
+
+		toString(): PartialDateString {
+			const { year, month, day, hour, minute, timeZoneId } = this.#fields;
+			let text = String(year).padStart(4, "0");
+			if (month !== undefined) text += `-${twoDigits(month)}`;
+			if (day !== undefined) text += `-${twoDigits(day)}`;
+			if (hour !== undefined) text += `T${twoDigits(hour)}:${twoDigits(minute!)}`;
+			return `${text}[${timeZoneId}]` as PartialDateString;
+		}
+
+		toJSON(): PartialDateString {
+			return this.toString();
+		}
+
+		valueOf(): never {
+			throw new TypeError("Use PartialDate.compare or isBefore/isAfter to compare PartialDates");
+		}
+
+		toLocaleString(locales?: Intl.LocalesArgument, options?: Intl.DateTimeFormatOptions): string {
+			return new Intl.DateTimeFormat(locales, {
+				...(options ?? DEFAULT_LOCALE_FORMATS[this.precision]),
+				timeZone: this.timeZoneId,
+			}).format(this.startEpochMilliseconds);
 		}
 	}
 
-	withTimezone(pd: PartialDate | PartialDate.Parsed, timezone: string): PartialDate {
-		const parsed = typeof pd === "string" ? this.parse(pd) : { ...pd };
-		parsed.timezone = timezone;
-		return this.format(parsed);
-	}
+	export class Year extends Base {
+		readonly precision = "year";
 
-	// == Conversions from Temporal types ==
-
-	parsedFromTemporal(obj: Temporal.PlainYearMonth): PartialDate.Parsed.YearMonth;
-	parsedFromTemporal(obj: Temporal.PlainDate): PartialDate.Parsed.YearMonthDay;
-	parsedFromTemporal(obj: Temporal.PlainDateTime): PartialDate.Parsed.YearMonthDayTime;
-	parsedFromTemporal(obj: Temporal.ZonedDateTime): PartialDate.Parsed.YearMonthDayTime;
-	parsedFromTemporal(
-		obj:
-			| Temporal.ZonedDateTime
-			| Temporal.PlainDateTime
-			| Temporal.PlainDate
-			| Temporal.PlainYearMonth,
-	): PartialDate.Parsed {
-		return {
-			precision: "hour" in obj && "minute" in obj ? "time" : "day" in obj ? "day" : "month",
-			year: obj.year,
-			month: obj.month,
-			day: "day" in obj ? obj.day : undefined,
-			hour: "hour" in obj ? obj.hour : undefined,
-			minute: "minute" in obj ? obj.minute : undefined,
-			timezone: "timeZoneId" in obj ? obj.timeZoneId : "UTC",
-		} as PartialDate.Parsed;
-	}
-
-	// == Factory methods ==
-
-	now(timeZone?: Temporal.TimeZoneLike): PartialDate.YearMonthDayTime {
-		const now = Temporal.Now.zonedDateTimeISO(timeZone);
-		return this.format(this.parsedFromTemporal(now));
-	}
-
-	// == Conversions to Temporal types ==
-
-	asPlainYearMonth(
-		pd:
-			| PartialDate.YearMonth
-			| PartialDate.YearMonthDay
-			| PartialDate.YearMonthDayTime
-			| PartialDate.Parsed.YearMonth
-			| PartialDate.Parsed.YearMonthDay
-			| PartialDate.Parsed.YearMonthDayTime,
-	): Temporal.PlainYearMonth {
-		const parsed =
-			typeof pd === "string"
-				? (this.parse(pd) as Exclude<PartialDate.Parsed, PartialDate.Parsed.YearOnly>)
-				: pd;
-		return new Temporal.PlainYearMonth(parsed.year, parsed.month, "iso8601");
-	}
-
-	asPlainDate(
-		pd:
-			| PartialDate.YearMonthDay
-			| PartialDate.YearMonthDayTime
-			| PartialDate.Parsed.YearMonthDay
-			| PartialDate.Parsed.YearMonthDayTime,
-	): Temporal.PlainDate {
-		const parsed =
-			typeof pd === "string"
-				? (this.parse(pd) as Exclude<
-						PartialDate.Parsed,
-						PartialDate.Parsed.YearOnly | PartialDate.Parsed.YearMonth
-					>)
-				: pd;
-		return new Temporal.PlainDate(parsed.year, parsed.month, parsed.day, "iso8601");
-	}
-
-	asPlainDateTime(
-		pd: PartialDate.YearMonthDayTime | PartialDate.Parsed.YearMonthDayTime,
-	): Temporal.PlainDateTime {
-		const parsed =
-			typeof pd === "string" ? (this.parse(pd) as PartialDate.Parsed.YearMonthDayTime) : pd;
-		return new Temporal.PlainDateTime(
-			parsed.year,
-			parsed.month,
-			parsed.day,
-			parsed.hour,
-			parsed.minute,
-		).withCalendar("iso8601");
-	}
-
-	asZonedDateTime(
-		pd: PartialDate.YearMonthDayTime | PartialDate.Parsed.YearMonthDayTime,
-	): Temporal.ZonedDateTime {
-		const parsed =
-			typeof pd === "string" ? (this.parse(pd) as PartialDate.Parsed.YearMonthDayTime) : pd;
-		return this.asPlainDateTime(parsed).toZonedDateTime(parsed.timezone);
-	}
-
-	asFormattableTemporal(pd: PartialDate | PartialDate.Parsed): Intl.FormattableTemporalObject {
-		const parsed = typeof pd === "string" ? this.parse(pd) : pd;
-		let temporal: Intl.FormattableTemporalObject;
-		switch (parsed.precision) {
-			case "year":
-				temporal = new Temporal.PlainYearMonth(parsed.year, 1);
-				break;
-			case "month":
-				temporal = PartialDateUtil.asPlainYearMonth(parsed);
-				break;
-			case "day":
-				temporal = PartialDateUtil.asPlainDate(parsed);
-				break;
-			case "time":
-				temporal = PartialDateUtil.asZonedDateTime(parsed).toInstant();
-				break;
+		constructor(year: number, timeZoneId: string) {
+			super({ year, timeZoneId });
 		}
-		return temporal;
-	}
 
-	// == Temporal.Instant conversions ==
+		with(fields: { year?: number; timeZoneId?: string }): Year {
+			return new Year(fields.year ?? this.year, fields.timeZoneId ?? this.timeZoneId);
+		}
 
-	toInstant(pd: PartialDate | PartialDate.Parsed, mode: "low" | "high"): Temporal.Instant {
-		const full = this.setPrecision(pd, "time", mode);
-		return this.asZonedDateTime(full).toInstant();
-	}
-
-	// == Comparision methods ==
-
-	/**
-	 * Checks if PartialDate {@link a} is strictly before PartialDate {@link b}.
-	 * This is true if the latest possible time represented by {@link a} is before the earliest possible time represented by {@link b}.
-	 */
-	isBefore(a: PartialDate | PartialDate.Parsed, b: PartialDate | PartialDate.Parsed): boolean {
-		return Temporal.Instant.compare(this.toInstant(a, "high"), this.toInstant(b, "low")) < 0;
-	}
-
-	/**
-	 * Checks if PartialDate {@link a} is strictly after PartialDate {@link b}
-	 * This is true if the earliest possible time represented by {@link a} is after the latest possible time represented by {@link b}
-	 */
-	isAfter(a: PartialDate | PartialDate.Parsed, b: PartialDate | PartialDate.Parsed): boolean {
-		return Temporal.Instant.compare(this.toInstant(a, "low"), this.toInstant(b, "high")) > 0;
-	}
-
-	/**
-	 * Checks if PartialDate {@link inner} is contained within PartialDate {@link outer}
-	 * This is true if both:
-	 * - The earliest possible time represented by {@link inner} is after the earliest possible time represented by {@link outer}
-	 * - And the latest possible time represented by {@link inner} is before the latest possible time represented by {@link outer}
-	 * ```
-	 * inner ----==----
-	 * outer --======--
-	 * ```
-	 */
-	isContainedIn(
-		inner: PartialDate | PartialDate.Parsed,
-		outer: PartialDate | PartialDate.Parsed,
-	): boolean {
-		return (
-			Temporal.Instant.compare(this.toInstant(inner, "low"), this.toInstant(outer, "low")) >= 0 &&
-			Temporal.Instant.compare(this.toInstant(inner, "high"), this.toInstant(outer, "high")) <= 0
-		);
-	}
-
-	/**
-	 * Checks if PartialDate {@link a} intersects with PartialDate {@link b}
-	 * This is true if either:
-	 * - The earliest possible time represented by {@link a} is before the latest possible time represented by {@link b}
-	 * - And the latest possible time represented by {@link a} is after the earliest possible time represented by {@link b}
-	 * ```
-	 * a --==---
-	 * b ---==--
-	 * ```
-	 */
-	intersects(a: PartialDate | PartialDate.Parsed, b: PartialDate | PartialDate.Parsed): boolean {
-		return (
-			Temporal.Instant.compare(this.toInstant(a, "low"), this.toInstant(b, "high")) < 0 &&
-			Temporal.Instant.compare(this.toInstant(a, "high"), this.toInstant(b, "low")) > 0
-		);
-	}
-
-	// == Humanization methods ==
-
-	toLocaleString(pd: PartialDate | PartialDate.Parsed, locales: string[] = ["en"]): string {
-		const parsed = typeof pd === "string" ? this.parse(pd) : pd;
-		switch (parsed.precision) {
-			case "year":
-				return parsed.year.toString();
-			case "month":
-				return this.asPlainYearMonth(parsed).toLocaleString(locales, {
-					year: "numeric",
-					month: "long",
-				});
-			case "day":
-				return this.asPlainDate(parsed).toLocaleString(locales, {
-					year: "numeric",
-					month: "long",
-					day: "numeric",
-				});
-			case "time":
-				return this.asZonedDateTime(parsed).toInstant().toLocaleString(locales, {
-					year: "numeric",
-					month: "long",
-					day: "numeric",
-					hour: "2-digit",
-					minute: "2-digit",
-				});
+		toMonth(month: number): Month {
+			return new Month(this.year, month, this.timeZoneId);
 		}
 	}
-})();
+
+	export class Month extends Base {
+		readonly precision = "month";
+		readonly month: number;
+
+		constructor(year: number, month: number, timeZoneId: string) {
+			super({ year, month, timeZoneId });
+			this.month = month;
+		}
+
+		get daysInMonth(): number {
+			return daysInMonth(this.year, this.month);
+		}
+
+		with(fields: { year?: number; month?: number; timeZoneId?: string }): Month {
+			return new Month(
+				fields.year ?? this.year,
+				fields.month ?? this.month,
+				fields.timeZoneId ?? this.timeZoneId,
+			);
+		}
+
+		toDay(day: number): Day {
+			return new Day(this.year, this.month, day, this.timeZoneId);
+		}
+
+		toPlainYearMonth(): Temporal.PlainYearMonth {
+			return new (requireTemporal().PlainYearMonth)(this.year, this.month);
+		}
+	}
+
+	export class Day extends Base {
+		readonly precision = "day";
+		readonly month: number;
+		readonly day: number;
+
+		constructor(year: number, month: number, day: number, timeZoneId: string) {
+			super({ year, month, day, timeZoneId });
+			this.month = month;
+			this.day = day;
+		}
+
+		with(fields: { year?: number; month?: number; day?: number; timeZoneId?: string }): Day {
+			return new Day(
+				fields.year ?? this.year,
+				fields.month ?? this.month,
+				fields.day ?? this.day,
+				fields.timeZoneId ?? this.timeZoneId,
+			);
+		}
+
+		toMonth(): Month {
+			return new Month(this.year, this.month, this.timeZoneId);
+		}
+
+		toTime(hour: number, minute: number): Time {
+			return new Time(this.year, this.month, this.day, hour, minute, this.timeZoneId);
+		}
+
+		toPlainDate(): Temporal.PlainDate {
+			return new (requireTemporal().PlainDate)(this.year, this.month, this.day);
+		}
+	}
+
+	export class Time extends Base {
+		readonly precision = "time";
+		readonly month: number;
+		readonly day: number;
+		readonly hour: number;
+		readonly minute: number;
+
+		constructor(
+			year: number,
+			month: number,
+			day: number,
+			hour: number,
+			minute: number,
+			timeZoneId: string,
+		) {
+			super({ year, month, day, hour, minute, timeZoneId });
+			this.month = month;
+			this.day = day;
+			this.hour = hour;
+			this.minute = minute;
+		}
+
+		with(fields: {
+			year?: number;
+			month?: number;
+			day?: number;
+			hour?: number;
+			minute?: number;
+			timeZoneId?: string;
+		}): Time {
+			return new Time(
+				fields.year ?? this.year,
+				fields.month ?? this.month,
+				fields.day ?? this.day,
+				fields.hour ?? this.hour,
+				fields.minute ?? this.minute,
+				fields.timeZoneId ?? this.timeZoneId,
+			);
+		}
+
+		toMonth(): Month {
+			return new Month(this.year, this.month, this.timeZoneId);
+		}
+
+		toDay(): Day {
+			return new Day(this.year, this.month, this.day, this.timeZoneId);
+		}
+
+		toPlainDate(): Temporal.PlainDate {
+			return new (requireTemporal().PlainDate)(this.year, this.month, this.day);
+		}
+
+		toPlainDateTime(): Temporal.PlainDateTime {
+			return new (requireTemporal().PlainDateTime)(
+				this.year,
+				this.month,
+				this.day,
+				this.hour,
+				this.minute,
+			);
+		}
+
+		toZonedDateTime(): Temporal.ZonedDateTime {
+			return requireTemporal()
+				.Instant.fromEpochMilliseconds(this.startEpochMilliseconds)
+				.toZonedDateTimeISO(this.timeZoneId);
+		}
+	}
+
+	export function isValid(value: unknown): value is PartialDateString {
+		if (typeof value !== "string") return false;
+		const fields = fieldsOfString(value);
+		return fields !== undefined && problemWith(fields) === undefined;
+	}
+
+	export function from(value: PartialDateString.YearMonthDayTime): Time;
+	export function from(value: PartialDateString.YearMonthDay): Day;
+	export function from(value: PartialDateString.YearMonth): Month;
+	export function from(value: PartialDateString.YearOnly): Year;
+	export function from(value: Base | string | Fields): PartialDate;
+	export function from(value: Base | string | Fields): PartialDate {
+		if (value instanceof Base) return value as PartialDate;
+		const fields =
+			typeof value === "string"
+				? fieldsOfString(value)
+				: {
+						year: value.year,
+						month: value.month,
+						day: value.day,
+						hour: value.hour,
+						minute: value.minute,
+						timeZoneId: value.timeZoneId,
+					};
+		if (!fields) throw new RangeError(`${value} is not a PartialDate`);
+		const { year, month, day, hour, minute, timeZoneId } = fields;
+		if (hour !== undefined || minute !== undefined)
+			return new Time(year, month!, day!, hour!, minute!, timeZoneId);
+		if (day !== undefined) return new Day(year, month!, day, timeZoneId);
+		if (month !== undefined) return new Month(year, month, timeZoneId);
+		return new Year(year, timeZoneId);
+	}
+
+	export function fromEpochMilliseconds(epochMilliseconds: number, timeZoneId: string): Time {
+		if (!Number.isFinite(epochMilliseconds))
+			throw new RangeError(`${epochMilliseconds} is not a point in time`);
+		if (!isTimeZoneId(timeZoneId)) throw new RangeError(`${timeZoneId} is not an IANA time zone`);
+		const { year, month, day, hour, minute } = wallClockAt(epochMilliseconds, timeZoneId);
+		return new Time(year, month, day, hour, minute, timeZoneId);
+	}
+
+	export function now(timeZoneId = new Intl.DateTimeFormat().resolvedOptions().timeZone): Time {
+		return fromEpochMilliseconds(Date.now(), timeZoneId);
+	}
+
+	export function compare(one: Base | string, other: Base | string): -1 | 0 | 1 {
+		const a = from(one);
+		const b = from(other);
+		const byStart = Math.sign(a.startEpochMilliseconds - b.startEpochMilliseconds);
+		if (byStart !== 0) return byStart as -1 | 1;
+		return Math.sign(PRECISIONS.indexOf(b.precision) - PRECISIONS.indexOf(a.precision)) as
+			| -1
+			| 0
+			| 1;
+	}
+}

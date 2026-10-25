@@ -1,7 +1,10 @@
 // core
 export { formats, findByExtension, findByMimeType } from "./formats/index.js";
-export type { FormatId } from "./formats/index.js";
-export type { FormatConverter, ConvertOptions } from "./types.js";
+export type { Format, FormatId } from "./formats/index.js";
+export type { FormatConverter, ConvertOptions, JsonObject } from "./types.js";
+export type { GoogleCalendarEvent } from "./formats/google.js";
+export type { CommunityLexiconEvent } from "./formats/community-lexicon.js";
+export type { JCalComponent } from "./formats/jcal.js";
 
 // tree-shaking
 export { icalendar } from "./formats/icalendar.js";

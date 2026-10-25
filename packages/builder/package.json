@@ -1,14 +1,21 @@
 {
 	"name": "@evnt/builder",
-	"version": "0.1.2",
+	"version": "0.2.0",
 	"description": "Open Evnt builder patterns",
 	"keywords": [
 		"builder",
 		"event",
 		"open evnt"
 	],
+	"homepage": "https://evnt.directory",
+	"bugs": "https://github.com/openevnt/openevnt-js/issues",
 	"license": "MIT",
 	"author": "Open Evnt Contributors",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/openevnt/openevnt-js.git",
+		"directory": "packages/builder"
+	},
 	"files": [
 		"/dist"
 	],

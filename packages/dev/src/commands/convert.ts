@@ -19,13 +19,14 @@ export default async function (event: unknown, flags: { format?: string; out?: s
 
 	const format = formats[fmtName]!;
 
-	if (!format.to) {
+	if (!("to" in format)) {
 		console.error(`Format "${fmtName}" does not support conversion to OpenEvnt → ${format.name}`);
 		console.error(`  Only "from" is defined (${format.name} → OpenEvnt).`);
 		process.exit(1);
 	}
 
-	const output = format.to(event as OpenEvnt);
+	const document = format.to(event as OpenEvnt);
+	const output = typeof document === "string" ? document : JSON.stringify(document, null, "\t");
 
 	if (flags.out) {
 		const { writeFileSync } = await import("node:fs");

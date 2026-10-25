@@ -1,6 +1,6 @@
-import { PartialDateUtil } from "@evnt/partial-date";
+import { PartialDate as PartialDates } from "@evnt/partial-date";
 import type { PartialDate, Venue } from "@evnt/types";
-import type { VenueGroup } from "../types.js";
+import type { DateGroup } from "../types.js";
 import { MarkdownFormatter } from "./markdown.js";
 import type { EmojiFormatOptions } from "./emoji.js";
 
@@ -40,11 +40,11 @@ export class DiscordFormatter extends MarkdownFormatter {
 	}
 
 	private unixTs(pd: PartialDate): number {
-		return PartialDateUtil.toInstant(pd, "low").epochMilliseconds / 1000;
+		return PartialDates.from(pd).startEpochMilliseconds / 1000;
 	}
 
 	private tsChar(pd: PartialDate): string {
-		return PartialDateUtil.has(pd, "time") ? "f" : "D";
+		return PartialDates.from(pd).has("time") ? "f" : "D";
 	}
 
 	private discordTs(pd: PartialDate): string {
@@ -93,18 +93,15 @@ export class DiscordFormatter extends MarkdownFormatter {
 		return super.clockEmoji(_pd);
 	}
 
-	protected override formatVenueGroup(
-		venueGroup: VenueGroup,
-		venueMap: Map<string, Venue>,
-	): string {
+	protected override formatVenueAndDates(venue: Venue | undefined, groups: DateGroup[]): string {
 		if (this.tsStyle === "only") {
-			const venueNames = venueGroup.venueIds
-				.map((id) => venueMap.get(id))
-				.filter(Boolean)
-				.map((v) => this.resolveText(v!.name));
-			const venueStr = venueNames.length > 0 ? venueNames.join(", ") : "";
+			const venueStr = venue
+				? venue.name
+					? this.resolveText(venue.name)
+					: (venue.address ?? "")
+				: "";
 
-			return venueGroup.groups
+			return groups
 				.map((g) => {
 					const dateStr = this.formatDateShape(g.dates);
 					const timeStr = g.times
@@ -115,6 +112,6 @@ export class DiscordFormatter extends MarkdownFormatter {
 				})
 				.join("\n");
 		}
-		return super.formatVenueGroup(venueGroup, venueMap);
+		return super.formatVenueAndDates(venue, groups);
 	}
 }

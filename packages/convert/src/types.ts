@@ -8,10 +8,14 @@ export interface ConvertOptions {
 	did?: string;
 	/** Stable identifier for the event, used where a format demands one (iCalendar UID). */
 	uid?: string;
+	/** The `id` of a document read from another format: the https URL it will be served from. */
+	id?: string;
 }
 
+export type JsonObject = Record<string, unknown>;
+
 /** A named format that can convert to/from OpenEvnt. */
-export interface FormatConverter<TOptions extends ConvertOptions = ConvertOptions> {
+export interface FormatConverter<TDocument, TOptions extends ConvertOptions = ConvertOptions> {
 	/** Human-readable name for the format. */
 	name: string;
 	/** Short description of the format. */
@@ -20,8 +24,8 @@ export interface FormatConverter<TOptions extends ConvertOptions = ConvertOption
 	extensions: string[];
 	/** MIME types associated with this format. */
 	mimeTypes: string[];
-	/** Convert OpenEvnt → this format (returns a string). Omitted if direction is not supported. */
-	to?: (event: OpenEvnt, opts?: TOptions) => string;
+	/** Convert OpenEvnt → this format. Omitted if direction is not supported. */
+	to?: (event: OpenEvnt, opts?: TOptions) => TDocument;
 	/** Convert this format → OpenEvnt. Omitted if direction is not supported. */
-	from?: (input: string, opts?: TOptions) => OpenEvnt;
+	from?: (input: TDocument, opts?: TOptions) => OpenEvnt;
 }

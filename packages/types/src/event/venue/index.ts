@@ -1,5 +1,10 @@
-import type { OnlineVenue } from "./OnlineVenue.js";
-import type { PhysicalVenue } from "./PhysicalVenue.js";
-import type { UnknownVenue } from "./UnknownVenue.js";
+import type { Translations } from "../../types/Translations.js";
+import type { AnyComponent } from "../component/index.js";
 
-export type Venue = PhysicalVenue | OnlineVenue | UnknownVenue;
+export interface Venue {
+	name?: Translations;
+	address?: string;
+	/** Uppercase ISO 3166-1 alpha-2 code */
+	countryCode?: string;
+	components?: AnyComponent[];
+}

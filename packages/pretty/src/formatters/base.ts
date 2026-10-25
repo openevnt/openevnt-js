@@ -1,6 +1,13 @@
-import { TranslationsUtil } from "@evnt/translations";
-import type { EventStatus, OpenEvnt, PartialDate, Venue } from "@evnt/types";
-import type { DateGroup, VenueGroup } from "../types.js";
+import { TranslationsUtil, type MaybeTranslations } from "@evnt/translations";
+import type {
+	EventStatus,
+	LinkComponent,
+	OpenEvnt,
+	PartialDate,
+	SourceComponent,
+	Venue,
+} from "@evnt/types";
+import type { DateGroup } from "../types.js";
 import { groupDates } from "../analyze.js";
 import { formatDate, formatDateRange, formatTime, formatTimeRange } from "../date.js";
 
@@ -14,12 +21,10 @@ export interface FormatOptions {
 	maxDates: number;
 }
 
-const statusTexts: Record<string, string> = {
-	planned: "Planned",
+const statusTexts: Record<EventStatus, string> = {
 	uncertain: "Uncertain",
 	postponed: "Postponed",
 	cancelled: "Cancelled",
-	suspended: "Suspended",
 };
 
 export class PlainTextFormatter {
@@ -41,49 +46,32 @@ export class PlainTextFormatter {
 		const name = this.resolveText(event.name);
 		lines.push(this.formatHeader(name));
 
-		if (event.label) {
-			lines.push(this.formatSubHeader(this.resolveText(event.label)));
-		}
-
 		if (this.options.showStatus && event.status) {
 			const text = statusTexts[event.status] ?? event.status;
 			lines.push(this.formatStatus(event.status, text));
 		}
 
-		const byId = new Map<string, Venue>();
-		for (const v of event.venues ?? []) byId.set(v.id, v);
-
-		const venueGroups = groupDates(event.instances ?? [], this.options.groupConsecutiveDates);
-		const totalDates = venueGroups.reduce((n, vg) => n + vg.groups.length, 0);
+		const groups = groupDates(event.occurrences ?? [], this.options.groupConsecutiveDates);
+		const totalDates = groups.length;
 		const shownCount =
 			this.options.maxDates > 0 ? Math.min(totalDates, this.options.maxDates) : totalDates;
 
-		const blocks: string[] = [];
-		let rendered = 0;
-		for (const vg of venueGroups) {
-			if (rendered >= shownCount) break;
-			const slice: DateGroup[] = [];
-			for (const g of vg.groups) {
-				if (rendered >= shownCount) break;
-				slice.push(g);
-				rendered++;
-			}
-			blocks.push(this.formatVenueGroup({ venueIds: vg.venueIds, groups: slice }, byId));
-		}
-
-		if (blocks.length > 0) lines.push(blocks.join("\n\n"));
+		lines.push(this.formatVenueAndDates(event.venue, groups.slice(0, shownCount)));
 		if (totalDates > shownCount) {
 			lines.push(`+ ${totalDates - shownCount} more dates`);
 		}
 
 		if (this.options.showLinks) {
 			for (const comp of event.components ?? []) {
-				if (
-					comp.$type === "directory.evnt.component.link" ||
-					comp.$type === "directory.evnt.component.source"
-				) {
-					const c = comp as { url: string; name?: Record<string, string> };
-					lines.push(this.formatLink(c.url, c.name ? this.resolveText(c.name) : undefined));
+				if (comp.$type === "directory.evnt.component.link#0") {
+					const link = comp as LinkComponent;
+					if (!link.disabled)
+						lines.push(
+							this.formatLink(link.url, link.name ? this.resolveText(link.name) : undefined),
+						);
+				}
+				if (comp.$type === "directory.evnt.component.source#0") {
+					lines.push(this.formatLink((comp as SourceComponent).url));
 				}
 			}
 		}
@@ -95,19 +83,14 @@ export class PlainTextFormatter {
 		return text;
 	}
 
-	protected formatSubHeader(text: string): string {
-		return text;
-	}
-
 	formatStatus(_status: EventStatus, text: string): string {
 		return text;
 	}
 
-	protected formatVenueGroup(venueGroup: VenueGroup, venueMap: Map<string, Venue>): string {
-		const venueStr = this.formatGroupVenues(venueGroup.venueIds, venueMap);
-		const dateLines = venueGroup.groups.map((g) => this.formatDateGroup(g));
-		if (venueStr) return [venueStr, dateLines.join("\n\n")].join("\n");
-		return dateLines.join("\n\n");
+	protected formatVenueAndDates(venue: Venue | undefined, groups: DateGroup[]): string {
+		const venueStr = venue ? this.formatVenue(venue) : "";
+		const dateLines = groups.map((g) => this.formatDateGroup(g));
+		return [venueStr, dateLines.join("\n\n")].filter(Boolean).join("\n");
 	}
 
 	protected formatDateGroup(group: DateGroup): string {
@@ -125,13 +108,8 @@ export class PlainTextFormatter {
 		return lines.join("\n");
 	}
 
-	protected formatGroupVenues(venueIds: string[], venueMap: Map<string, Venue>): string {
-		const names: string[] = [];
-		for (const id of venueIds) {
-			const venue = venueMap.get(id);
-			if (venue) names.push(this.resolveText(venue.name));
-		}
-		return names.join(", ");
+	protected formatVenue(venue: Venue): string {
+		return venue.name ? this.resolveText(venue.name) : (venue.address ?? "");
 	}
 
 	protected formatDateShape(shape: DateGroup["dates"]): string {
@@ -165,7 +143,7 @@ export class PlainTextFormatter {
 		return name ?? url;
 	}
 
-	protected resolveText(translations: Record<string, string>): string {
+	protected resolveText(translations: MaybeTranslations): string {
 		return TranslationsUtil.translate(translations, [this.options.language]);
 	}
 }

@@ -8,10 +8,9 @@ import {
 	rmSync,
 } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import { OpenEvntSchema } from "@evnt/schema";
+import { OpenEvntValidator } from "@evnt/schema";
 import { PlainTextFormatter } from "@evnt/pretty";
 import { SchemaValidationError } from "../errors.js";
-import { ZodError } from "zod";
 
 const findEvntFiles = (dir: string): string[] => {
 	const results: string[] = [];
@@ -71,15 +70,15 @@ export default async function (opts: { dir: string; out: string; feed?: string }
 			continue;
 		}
 
-		const result = OpenEvntSchema.safeParse(json);
-		if (!result.success) {
-			const err = new SchemaValidationError(file, result.error as ZodError, content);
+		const result = OpenEvntValidator.validate(json);
+		if (result.issues) {
+			const err = new SchemaValidationError(file, result.issues, content);
 			console.error(err.getCodeFrames());
 			invalid++;
 			continue;
 		}
 
-		const event = result.data;
+		const event = result.value;
 		const relPath = relative(dir, file);
 		const outPath = join(out, relPath);
 		mkdirSync(outPath.replace(/\/[^/]+$/, ""), { recursive: true });
@@ -89,10 +88,10 @@ export default async function (opts: { dir: string; out: string; feed?: string }
 			...PlainTextFormatter.defaultOptions,
 			language: "en",
 			timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-		}).formatEvent(event as any);
+		}).formatEvent(event);
 
 		items.push({
-			id: relPath,
+			id: event.id,
 			url: relPath,
 			title: titleOf(event),
 			content_text: contentText,

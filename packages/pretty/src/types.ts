@@ -3,12 +3,6 @@ import type { PartialDate } from "@evnt/types";
 export interface DateGroup {
 	dates: SingleDate | DateRange | DateList;
 	times: TimeSlot[];
-	venueIds: string[];
-}
-
-export interface VenueGroup {
-	venueIds: string[];
-	groups: DateGroup[];
 }
 
 export interface SingleDate {

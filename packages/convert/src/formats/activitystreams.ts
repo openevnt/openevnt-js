@@ -1,45 +1,59 @@
-import type { OpenEvnt } from "@evnt/types";
-import { OpenEvntSchema } from "@evnt/schema";
+import type { AnyComponent, CoordinatesComponent, OpenEvnt, Venue } from "@evnt/types";
+import { OpenEvntValidator } from "@evnt/schema";
 import { translate, createTranslations } from "../utils/translations.js";
 import { isRecord, asArray, asNonEmptyString, asNumber, readUrlLike } from "../utils/text.js";
 import { parseDateString, partialDateToIso } from "../utils/date.js";
-import type { FormatConverter, ConvertOptions } from "../types.js";
+import {
+	findDescription,
+	isLink,
+	isSource,
+	isSplashMedia,
+	link,
+	markdownText,
+} from "../utils/components.js";
+import { documentId, nonEmpty } from "../utils/document.js";
+import type { FormatConverter, ConvertOptions, JsonObject } from "../types.js";
 
-export const activitystreams: FormatConverter = {
+const coordinates = (
+	latitude: number | undefined,
+	longitude: number | undefined,
+): CoordinatesComponent | undefined =>
+	latitude !== undefined &&
+	longitude !== undefined &&
+	Math.abs(latitude) <= 90 &&
+	Math.abs(longitude) <= 180
+		? { $type: "directory.evnt.component.coordinates#0", latitude, longitude }
+		: undefined;
+
+export const activitystreams = {
 	name: "ActivityStreams",
 	description: "W3C Activity Streams 2.0 format",
 	extensions: ["json"],
 	mimeTypes: ["application/activity+json", "application/ld+json"],
 
-	from: (input: string, opts?: ConvertOptions): OpenEvnt => {
+	from: (data: JsonObject, opts?: ConvertOptions): OpenEvnt => {
 		const language = opts?.language ?? "en";
-		const data = JSON.parse(input);
+		const timeZoneId = opts?.timezone ?? "UTC";
 
 		// If there's an embedded canonical OpenEvnt, prefer it
 		if (isRecord(data.evntData)) {
-			const embedded = OpenEvntSchema.safeParse(data.evntData);
-			if (embedded.success) return embedded.data;
+			const embedded = OpenEvntValidator.validate(data.evntData);
+			if (!embedded.issues) return embedded.value;
 		}
 
-		const venues: NonNullable<OpenEvnt["venues"]> = [];
-		let venueCounter = 0;
-		const nextVenueId = (): string => `as:${venueCounter++}`;
+		const components: AnyComponent[] = [];
+		let venue: Venue | undefined;
 
 		for (const rawLocation of asArray(data.location)) {
 			if (typeof rawLocation === "string") {
-				venues.push({
-					id: nextVenueId(),
-					$type: "directory.evnt.venue.unknown",
-					name: createTranslations(rawLocation, language),
-				});
+				venue ??= { name: { [language]: rawLocation } };
 				continue;
 			}
 			if (!isRecord(rawLocation)) continue;
 
-			const locationName = asNonEmptyString(rawLocation.name) ?? `Venue ${venues.length + 1}`;
+			const locationName = asNonEmptyString(rawLocation.name);
 			const locationUrl = readUrlLike(rawLocation.url) ?? readUrlLike(rawLocation);
-			const latitude = asNumber(rawLocation.latitude);
-			const longitude = asNumber(rawLocation.longitude);
+			const place = coordinates(asNumber(rawLocation.latitude), asNumber(rawLocation.longitude));
 
 			const addressRaw = rawLocation.address;
 			const addressLine =
@@ -54,38 +68,32 @@ export const activitystreams: FormatConverter = {
 				? asNonEmptyString(addressRaw.addressCountry)
 				: undefined;
 			const countryCode =
-				countryCodeRaw && countryCodeRaw.length === 2 ? countryCodeRaw.toUpperCase() : undefined;
+				countryCodeRaw && /^[A-Za-z]{2}$/.test(countryCodeRaw)
+					? countryCodeRaw.toUpperCase()
+					: undefined;
 
 			const type = asNonEmptyString(rawLocation.type)?.toLowerCase();
 			const looksOnline = type === "link" || type === "linkobject" || type === "virtualplace";
 			const hasPhysicalData =
-				latitude !== undefined ||
-				longitude !== undefined ||
-				addressLine !== undefined ||
-				countryCode !== undefined;
+				place !== undefined || addressLine !== undefined || countryCode !== undefined;
 
 			if (locationUrl && (looksOnline || !hasPhysicalData)) {
-				venues.push({
-					id: nextVenueId(),
-					$type: "directory.evnt.venue.online",
-					name: createTranslations(locationName, language),
-					url: locationUrl,
-				});
+				components.push(link(locationUrl, locationName, language));
 				continue;
 			}
 
-			venues.push({
-				id: nextVenueId(),
-				$type: "directory.evnt.venue.physical",
+			if (venue || !(locationName || hasPhysicalData)) continue;
+			venue = {
 				name: createTranslations(locationName, language),
-				address: { addr: addressLine, countryCode },
-			});
+				address: addressLine,
+				countryCode,
+				components: place ? [place] : undefined,
+			};
 		}
 
-		const components: NonNullable<OpenEvnt["components"]> = [];
 		const addUrlAsLink = (url: unknown) => {
 			const href = readUrlLike(url);
-			if (href) components.push({ $type: "directory.evnt.component.link", url: href });
+			if (href) components.push(link(href, undefined, language));
 		};
 
 		for (const urlValue of asArray(data.url)) addUrlAsLink(urlValue);
@@ -110,7 +118,7 @@ export const activitystreams: FormatConverter = {
 
 			if (isMedia) {
 				components.push({
-					$type: "directory.evnt.component.splashMedia",
+					$type: "directory.evnt.component.splashMedia#0",
 					media: {
 						sources: [{ url: href, mimeType: mediaType || undefined }],
 						alt: createTranslations(asNonEmptyString(attachment.name), language),
@@ -125,40 +133,28 @@ export const activitystreams: FormatConverter = {
 
 		const summary = asNonEmptyString(data.summary);
 		const content = asNonEmptyString(data.content);
-		if (content || summary) {
-			components.push({
-				$type: "directory.evnt.richtext.markdown",
-				language,
-				content: content ?? summary ?? "",
-			});
-		}
+		if (content || summary) components.push(markdownText((content ?? summary)!, language));
 
 		const start = asNonEmptyString(data.startTime);
 		const end = asNonEmptyString(data.endTime);
-
-		const nameStr = asNonEmptyString(data.name);
+		const startDate = start ? parseDateString(start, timeZoneId) : undefined;
+		const endDate = end ? parseDateString(end, timeZoneId) : undefined;
 
 		return {
-			v: "0.1",
-			name: nameStr ? createTranslations(nameStr, language) : { [language]: "Untitled Event" },
-			venues: venues.length > 0 ? venues : undefined,
-			instances:
-				start || end || venues.length > 0
-					? [
-							{
-								venueIds: venues.map((v) => v.id),
-								start: start ? parseDateString(start) : undefined,
-								end: end ? parseDateString(end) : undefined,
-							},
-						]
-					: undefined,
-			components: components.length > 0 ? components : undefined,
+			v: "0.2",
+			id: documentId(opts),
+			name: createTranslations(asNonEmptyString(data.name), language) ?? {
+				[language]: "Untitled Event",
+			},
+			venue,
+			occurrences: startDate || endDate ? [{ start: startDate, end: endDate }] : undefined,
+			components: nonEmpty(components),
 		};
 	},
 
-	to: (data: OpenEvnt, opts?: ConvertOptions): string => {
+	to: (data: OpenEvnt, opts?: ConvertOptions): JsonObject => {
 		const language = opts?.language ?? "en";
-		const object: Record<string, unknown> = {
+		const object: JsonObject = {
 			"@context": "https://www.w3.org/ns/activitystreams",
 			type: "Event",
 			name: translate(data.name, [language]) ?? "Untitled Event",
@@ -166,73 +162,62 @@ export const activitystreams: FormatConverter = {
 
 		object.evntData = data;
 
-		const primaryInstance =
-			data.instances?.find((inst) => inst.start || inst.end) ?? data.instances?.[0];
-		if (primaryInstance?.start) {
-			const iso = partialDateToIso(primaryInstance.start);
+		const primaryOccurrence =
+			data.occurrences?.find((occurrence) => occurrence.start || occurrence.end) ??
+			data.occurrences?.[0];
+		if (primaryOccurrence?.start) {
+			const iso = partialDateToIso(primaryOccurrence.start);
 			if (iso) object.startTime = iso;
-			else (object as Record<string, unknown>).evntPartialStart = primaryInstance.start;
+			else object.evntPartialStart = primaryOccurrence.start;
 		}
-		if (primaryInstance?.end) {
-			const iso = partialDateToIso(primaryInstance.end);
+		if (primaryOccurrence?.end) {
+			const iso = partialDateToIso(primaryOccurrence.end);
 			if (iso) object.endTime = iso;
-			else (object as Record<string, unknown>).evntPartialEnd = primaryInstance.end;
+			else object.evntPartialEnd = primaryOccurrence.end;
 		}
 
 		const locations: Record<string, unknown>[] = [];
-		for (const venue of data.venues ?? []) {
-			const venueName = translate(venue.name, [language]);
-			if (venue.$type === "directory.evnt.venue.online") {
-				locations.push({ type: "Link", name: venueName, href: venue.url });
-			} else if (venue.$type === "directory.evnt.venue.physical") {
-				locations.push({ type: "Place", name: venueName, address: venue.address?.addr });
-			} else {
-				locations.push({ type: "Place", name: venueName });
-			}
+		if (data.venue) {
+			const place = data.venue.components?.find(
+				(component): component is CoordinatesComponent =>
+					component.$type === "directory.evnt.component.coordinates#0",
+			);
+			locations.push({
+				type: "Place",
+				name: translate(data.venue.name, [language]),
+				address: data.venue.address,
+				latitude: place?.latitude,
+				longitude: place?.longitude,
+			});
 		}
-		if (locations.length === 1) object.location = locations[0];
-		else if (locations.length > 1) object.location = locations;
 
 		const urls: string[] = [];
 		const attachments: Record<string, unknown>[] = [];
 
 		for (const component of data.components ?? []) {
-			const c = component as Record<string, unknown>;
-			const type = c.$type as string;
-
-			if (type === "directory.evnt.component.link" || type === "directory.evnt.component.source") {
-				if (c.url && typeof c.url === "string") urls.push(c.url);
-				continue;
-			}
-
-			if (type === "directory.evnt.component.splashMedia") {
-				const splash = c as unknown as {
-					$type: string;
-					media: {
-						sources: Array<{ url: string; mimeType?: string }>;
-						alt?: Record<string, string>;
-					};
-				};
-				for (const source of splash.media.sources) {
+			if (isLink(component) || isSource(component)) {
+				urls.push(component.url);
+			} else if (isSplashMedia(component)) {
+				for (const source of component.media.sources) {
 					attachments.push({
 						type: source.mimeType?.startsWith("video/") ? "Video" : "Image",
 						url: source.url,
 						mediaType: source.mimeType,
-						name: splash.media.alt ? translate(splash.media.alt, [language]) : undefined,
+						name: component.media.alt ? translate(component.media.alt, [language]) : undefined,
 					});
 				}
-				continue;
-			}
-
-			if (type === "directory.evnt.richtext.markdown") {
-				if (!object.content && typeof c.content === "string") object.content = c.content;
 			}
 		}
 
+		const description = findDescription(data.components, [language]);
+		if (description) object.content = description.text;
+
+		if (locations.length === 1) object.location = locations[0];
+		else if (locations.length > 1) object.location = locations;
 		if (urls.length === 1) object.url = urls[0];
 		else if (urls.length > 1) object.url = urls;
 		if (attachments.length > 0) object.attachment = attachments;
 
-		return JSON.stringify(object, null, "\t");
+		return object;
 	},
-};
+} satisfies FormatConverter<JsonObject>;

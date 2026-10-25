@@ -1,10 +1,13 @@
-import type { OpenEvnt, Media, PartialDate, PhysicalVenue } from "@evnt/types";
-import { PartialDateUtil } from "@evnt/partial-date";
-import { EventBuilder, PhysicalVenueBuilder } from "@evnt/builder";
+import type { AnyComponent, CoordinatesComponent, EventStatus, OpenEvnt, Venue } from "@evnt/types";
 import type { CommunityLexiconCalendarEvent } from "../lexicons/index.js";
+import { createTranslations } from "../utils/translations.js";
+import { asNumber } from "../utils/text.js";
+import { parseDateString } from "../utils/date.js";
+import { link, plainText } from "../utils/components.js";
+import { documentId, nonEmpty } from "../utils/document.js";
 import type { FormatConverter, ConvertOptions } from "../types.js";
 
-interface LexiconEvent extends CommunityLexiconCalendarEvent.Main {
+export interface CommunityLexiconEvent extends CommunityLexiconCalendarEvent.Main {
 	media?: Array<{
 		$type?: "community.lexicon.calendar.event#media";
 		alt?: string;
@@ -20,110 +23,87 @@ interface LexiconEvent extends CommunityLexiconCalendarEvent.Main {
 	additionalData?: Record<string, unknown>;
 }
 
-export const communityLexicon: FormatConverter = {
+const STATUSES: Record<string, EventStatus> = {
+	"community.lexicon.calendar.event#cancelled": "cancelled",
+	"community.lexicon.calendar.event#postponed": "postponed",
+};
+
+const coordinates = (latitude: unknown, longitude: unknown): CoordinatesComponent | undefined => {
+	const lat = asNumber(latitude);
+	const long = asNumber(longitude);
+	return lat !== undefined && long !== undefined && Math.abs(lat) <= 90 && Math.abs(long) <= 180
+		? { $type: "directory.evnt.component.coordinates#0", latitude: lat, longitude: long }
+		: undefined;
+};
+
+export const communityLexicon = {
 	name: "Community Lexicon",
 	description: "AT Protocol community lexicon calendar event",
 	extensions: ["json"],
 	mimeTypes: ["application/json"],
 
-	from: (input: string, opts?: ConvertOptions): OpenEvnt => {
+	from: (event: CommunityLexiconEvent, opts?: ConvertOptions): OpenEvnt => {
 		const language = opts?.language ?? "en";
-		const event: LexiconEvent = JSON.parse(input);
-		const builder = new EventBuilder();
+		const timeZoneId = opts?.timezone ?? "UTC";
 
-		if (event.name) builder.setName(event.name, language);
+		const components: AnyComponent[] = [];
+		const venueComponents: AnyComponent[] = [];
+		let venue: Venue = {};
 
-		const upsertPhysicalVenue = (
-			name: string,
-			fn: (b: PhysicalVenueBuilder) => PhysicalVenueBuilder,
-		) => {
-			const idx = builder.data.venues?.findIndex(
-				(v) => v.$type === "directory.evnt.venue.physical" && v.name[language] === name,
-			);
-			builder.data.venues ??= [];
-			if (idx !== undefined && idx >= 0) {
-				const venue = builder.data.venues[idx]!;
-				builder.data.venues[idx] = fn(
-					new PhysicalVenueBuilder(venue as PhysicalVenue, builder),
-				).build();
-			} else {
-				builder.addPhysicalVenue((b) => fn(b).setName(name, language));
+		for (const location of event.locations ?? []) {
+			const name = "name" in location ? location.name : undefined;
+			if (location.$type === "community.lexicon.calendar.event#uri") {
+				components.push(link(location.uri, name, language));
+				continue;
 			}
-		};
-
-		for (const [index, location] of (event.locations ?? []).entries()) {
+			venue.name ??= createTranslations(name, language);
 			switch (location.$type) {
-				case "community.lexicon.calendar.event#uri":
-					builder.addOnlineVenue((v) =>
-						v
-							.setId(index.toString())
-							.setName(location.name ?? "", language)
-							.setUrl(location.uri),
-					);
-					break;
 				case "community.lexicon.location.address":
-					upsertPhysicalVenue(location.name ?? "", (b) =>
-						b
-							.setId(index.toString())
-							.setCountryCode(location.country)
-							.setAddressLine(
-								[location.street, location.locality, location.region].filter(Boolean).join(" "),
-							),
-					);
+					venue.address ??=
+						[location.street, location.locality, location.region].filter(Boolean).join(" ") ||
+						undefined;
+					if (/^[A-Za-z]{2}$/.test(location.country))
+						venue.countryCode ??= location.country.toUpperCase();
 					break;
-				case "community.lexicon.location.fsq":
-				case "community.lexicon.location.geo":
-					upsertPhysicalVenue(location.name ?? "", (b) => b.setId(index.toString()));
+				case "community.lexicon.location.fsq": {
+					venueComponents.push({
+						$type: "directory.evnt.component.placeId#0",
+						type: "com.foursquare",
+						id: location.fsq_place_id,
+					});
+					const place = coordinates(location.latitude, location.longitude);
+					if (place) venueComponents.push(place);
 					break;
-				default:
-					builder.addUnknownVenue((v) =>
-						v.setId(index.toString()).setName(location.name ?? "", language),
-					);
+				}
+				case "community.lexicon.location.geo": {
+					const place = coordinates(location.latitude, location.longitude);
+					if (place) venueComponents.push(place);
+					break;
+				}
 			}
 		}
 
-		// Build PartialDate from a JS Date string
-		const jsDateToPartialDate = (value: string): PartialDate | undefined => {
-			const d = new Date(value);
-			if (isNaN(d.getTime())) return undefined;
-			const hour = d.getUTCHours();
-			const minute = d.getUTCMinutes();
-			return PartialDateUtil.format({
-				year: d.getUTCFullYear(),
-				month: d.getUTCMonth() + 1,
-				day: d.getUTCDate(),
-				hour,
-				minute,
-				timezone: "UTC",
-				precision: hour === 0 && minute === 0 ? "day" : "time",
-			} as PartialDate.Parsed);
-		};
+		const firstCoordinates = venueComponents.find(
+			(component) => component.$type === "directory.evnt.component.coordinates#0",
+		);
+		venue.components = nonEmpty(
+			venueComponents.filter(
+				(component) =>
+					component.$type !== "directory.evnt.component.coordinates#0" ||
+					component === firstCoordinates,
+			),
+		);
 
-		if (event.startsAt || event.endsAt) {
-			builder.addInstance((i) => {
-				if (event.startsAt) {
-					const pd = jsDateToPartialDate(event.startsAt);
-					if (pd) i.setStart(pd);
-				}
-				if (event.endsAt) {
-					const pd = jsDateToPartialDate(event.endsAt);
-					if (pd) i.setEnd(pd);
-				}
-				i.addAllVenues();
-				return i;
-			});
-		}
+		const start = event.startsAt ? parseDateString(event.startsAt, timeZoneId) : undefined;
+		const end = event.endsAt ? parseDateString(event.endsAt, timeZoneId) : undefined;
 
-		for (const link of event.uris ?? []) {
-			builder.addLink((l) => l.setUrl(link.uri).setName(link.name ?? "", language));
-		}
+		for (const uri of event.uris ?? []) components.push(link(uri.uri, uri.name, language));
 
 		for (const media of event.media ?? []) {
-			builder.data.components ??= [];
-			builder.data.components.push({
-				$type: "directory.evnt.component.splashMedia",
+			components.push({
+				$type: "directory.evnt.component.splashMedia#0",
 				media: {
-					alt: media.alt ? { [language]: media.alt } : undefined,
+					alt: createTranslations(media.alt, language),
 					sources: [
 						{
 							mimeType: media.content.mimeType,
@@ -132,27 +112,30 @@ export const communityLexicon: FormatConverter = {
 								: `at://${media.content.ref.$link}`,
 						},
 					],
-				} as Media,
-				roles: [media.role, "background", "poster"].filter(Boolean) as string[],
+				},
+				roles: [...new Set([media.role, "background", "poster"].filter(Boolean) as string[])],
 			});
 		}
 
-		if (event.description) {
-			builder.data.components ??= [];
-			builder.data.components.push({
-				$type: "directory.evnt.richtext.markdown",
-				content: event.description,
-			});
-		}
+		if (event.description) components.push(plainText(event.description, language));
 
 		if (event.additionalData) {
-			builder.data.components ??= [];
-			builder.data.components.push({
-				$type: "community.lexicon.calendar.event#additionalData",
+			components.push({
+				$type: "community.lexicon.calendar.event.additionalData#0",
 				...event.additionalData,
 			});
 		}
 
-		return builder.build();
+		const hasVenue = Object.values(venue).some((field) => field !== undefined);
+
+		return {
+			v: "0.2",
+			id: documentId(opts),
+			name: createTranslations(event.name, language) ?? { [language]: "Untitled Event" },
+			status: event.status ? STATUSES[event.status] : undefined,
+			venue: hasVenue ? venue : undefined,
+			occurrences: start || end ? [{ start, end }] : undefined,
+			components: nonEmpty(components),
+		};
 	},
-};
+} satisfies FormatConverter<CommunityLexiconEvent>;
